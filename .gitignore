@@ -1,0 +1,9 @@
+node_modules/
+.tmp/
+test-results/
+.chem-editor/
+lib/
+dist/
+*.tgz
+scripts/live-check.patch.yml
+scripts/live-inspect.mjs

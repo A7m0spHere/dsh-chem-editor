@@ -1,0 +1,10 @@
+import { build } from 'esbuild';
+import { mkdir, writeFile, copyFile } from 'node:fs/promises';
+await mkdir('lib', { recursive: true });
+await mkdir('dist', { recursive: true });
+await build({ entryPoints: ['src/editor.tsx'], bundle: true, format: 'esm', platform: 'browser', outfile: 'dist/editor.js', minify: true, sourcemap: false, banner: { js: 'globalThis.process ??= {env:{},versions:{},browser:true,nextTick:(fn,...args)=>queueMicrotask(()=>fn(...args))};' }, define: { 'process.env.NODE_ENV': '"production"', 'global': 'globalThis' }, loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl', '.svg': 'dataurl', '.png': 'dataurl' } });
+await copyFile('src/editor.html', 'dist/index.html');
+await build({ entryPoints: ['src/index.ts'], bundle: true, platform: 'node', format: 'esm', outfile: 'lib/index.js' });
+const client = await build({ entryPoints: ['src/client.tsx'], bundle: true, platform: 'browser', format: 'cjs', external: ['react'], write: false });
+await writeFile('lib/client.js', `window.__ModuleLoader__.load({id:'dsh-chem-editor',factory:(require)=>{const module={exports:{}};const exports=module.exports;\n${client.outputFiles[0].text}\nreturn module.exports;}});\n`);
+console.log('Built host, DSH client and isolated Ketcher editor.');
