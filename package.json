@@ -15,7 +15,8 @@
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
-    "assets/readme"
+    "assets/readme",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
@@ -66,5 +67,6 @@
     "chemistry",
     "cheminformatics",
     "ketcher"
-  ]
+  ],
+  "license": "MIT"
 }

@@ -108,4 +108,4 @@ Real-model tests require a separately configured official DSH temporary Web prof
 
 ## Licensing and acknowledgements
 
-This project has not yet selected an independent open-source license. [EPAM Ketcher](https://github.com/epam/ketcher) and [Indigo](https://github.com/epam/Indigo) use Apache-2.0; other dependencies retain their own licenses. Third-party notices are preserved in the build.
+Project code is licensed under the [MIT License](./LICENSE). [EPAM Ketcher](https://github.com/epam/ketcher) and [Indigo](https://github.com/epam/Indigo) use Apache-2.0; other dependencies retain their own licenses. Third-party notices are preserved in the build.

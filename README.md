@@ -108,4 +108,4 @@ pnpm run test:browser
 
 ## 许可与致谢
 
-本项目尚未指定独立开源许可证。[EPAM Ketcher](https://github.com/epam/ketcher) 与 [Indigo](https://github.com/epam/Indigo) 使用 Apache-2.0；其他依赖遵循各自许可证。第三方许可声明随构建保留。
+本项目代码采用 [MIT 许可证](./LICENSE)。[EPAM Ketcher](https://github.com/epam/ketcher) 与 [Indigo](https://github.com/epam/Indigo) 使用 Apache-2.0；其他依赖遵循各自许可证。第三方许可声明随构建保留。
