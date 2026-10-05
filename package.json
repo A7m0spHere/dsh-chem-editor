@@ -3,18 +3,68 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Persistent bilingual molecular editor for DeepSeek Harness",
-  "exports": { ".": "./lib/index.js", "./client": "./lib/client.js", "./package.json": "./package.json" },
-  "files": ["lib", "dist", "cordis.patch.yml", "README.md", "README.en.md"],
+  "description": "Molecular editor for DeepSeek Harness with bilingual 2D editing, Agent-assisted local changes, previews and undo",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "dist",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "assets/readme"
+  ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
-      "inject": ["@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-ui-layout", "@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-sidebar-right"],
-      "external": ["react"]
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ],
+      "external": [
+        "react"
+      ]
     }
   },
-  "scripts": { "build": "node scripts/build.mjs", "prepack": "node scripts/build.mjs", "test": "node --test tests/*.test.mjs", "test:browser": "node scripts/run-browser-tests.mjs" },
-  "dependencies": { "ketcher-core": "3.7.0", "ketcher-react": "3.7.0", "ketcher-standalone": "3.7.0", "react": "18.3.1", "react-dom": "18.3.1" },
-  "devDependencies": { "esbuild": "0.25.12", "playwright": "1.56.1", "typescript": "5.9.3" }
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node scripts/run-browser-tests.mjs"
+  },
+  "dependencies": {
+    "ketcher-core": "3.7.0",
+    "ketcher-react": "3.7.0",
+    "ketcher-standalone": "3.7.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.56.1",
+    "typescript": "5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/A7m0spHere/dsh-chem-editor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/A7m0spHere/dsh-chem-editor/issues"
+  },
+  "homepage": "https://github.com/A7m0spHere/dsh-chem-editor#readme",
+  "keywords": [
+    "deepseek-harness",
+    "molecular-editor",
+    "chemistry",
+    "cheminformatics",
+    "ketcher"
+  ]
 }

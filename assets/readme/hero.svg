@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">dsh-chem-editor — molecular editing inside DeepSeek Harness</title>
+  <desc id="desc">Select a molecular region and preview a local edit. The example changes one carbon in benzene to nitrogen to form pyridine, preserving the rest of the ring.</desc>
+  <rect width="1200" height="300" rx="18" fill="#f4f7fc"/>
+  <g id="project-title" font-family="Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif">
+    <text x="52" y="54" fill="#637187" font-size="23">DeepSeek Harness · Molecular editor</text>
+    <text x="48" y="129" fill="#253044" font-size="62" font-weight="650" letter-spacing="-2">dsh-chem-editor</text>
+    <text x="52" y="181" fill="#426fe5" font-size="28">Select a region. Preview a local edit.</text>
+    <text x="52" y="251" fill="#637187" font-size="23">2D editing · 中文 / English · KET documents</text>
+  </g>
+  <g id="benzene-to-pyridine" stroke="#253044" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M858 84 L910 114 L910 174 L858 204 L806 174 L806 114 Z"/>
+    <path d="M896 121 L896 167 M858 188 L820 166 M820 122 L850 104"/>
+    <path d="M1078 84 L1130 114 L1130 174 L1078 204 L1026 174 L1026 114 Z"/>
+    <path d="M1116 121 L1116 167 M1078 188 L1040 166 M1040 122 L1070 104"/>
+    <circle cx="858" cy="84" r="17" stroke="#426fe5" fill="#e9efff" stroke-width="3"/>
+    <circle cx="1078" cy="84" r="19" fill="#f4f7fc" stroke="none"/>
+    <path d="M943 144 H992 M982 134 L992 144 L982 154" stroke="#426fe5"/>
+  </g>
+  <g font-family="Segoe UI, sans-serif" text-anchor="middle">
+    <text x="858" y="92" fill="#426fe5" font-size="24" font-weight="600">C</text>
+    <text x="1078" y="94" fill="#426fe5" font-size="29" font-weight="600">N</text>
+    <text x="858" y="251" fill="#637187" font-size="21">BEFORE</text>
+    <text x="1078" y="251" fill="#426fe5" font-size="21">PREVIEW</text>
+  </g>
+</svg>
