@@ -4,7 +4,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AnnotationService, DocumentStore, verifyPatch, executePatch } from '../lib/index.js';
+import { AnnotationService, DocumentStore, verifyPatch, executePatch, fragmentCatalog } from '../lib/index.js';
 const ket = JSON.stringify({ root: { nodes: [{ $ref: 'mol0' }] }, mol0: { type: 'molecule', atoms: [{ label: 'C', location: [0, 0, 0] }, { label: 'C', location: [1, 0, 0] }], bonds: [{ type: 1, atoms: [0, 1] }] } });
 test('annotations freeze targets, reject foreign/stale edits, cancel and commit once', async () => {
   const base = resolve(tmpdir()), dir = await mkdtemp(join(base, 'chem-annotations-'));
@@ -19,6 +19,9 @@ test('annotations freeze targets, reject foreign/stale edits, cancel and commit 
     await service.create('session-a', input, new AbortController().signal); assert.equal(prompts.length, 1, 'same request must not enqueue another model turn');
     await assert.rejects(service.context('session-b', id), e => e.code === 'annotation_not_found');
     const context = JSON.parse((await service.context('session-a', id)).context); assert.equal(context.selectedAtom.id, 37);
+    assert.deepEqual(context.fragmentTemplates,fragmentCatalog());
+    assert.equal(context.attachmentAtom,37);
+    assert.ok(prompts[0].content[0].text.includes('正丙基'));
     service.updateFrame('session-a', { ...snapshot, selection: { atoms: [99], bonds: [] } });
     assert.equal(JSON.parse((await service.context('session-a', id)).context).selectedAtom.id, 37, 'later selection must not retarget the annotation');
     await assert.rejects(service.propose('session-a', { annotationId: id, targetAtom: 99, element: 'N' }, new AbortController().signal), e => e.code === 'out_of_selection');
@@ -70,5 +73,54 @@ test('fragment proposals and commits are idempotent; forged candidates cannot al
     await assert.rejects(service.commit('session-a',command),e=>e.code==='out_of_selection');assert.equal((await store.read(dir,'session-a')).token,saved.token);
     command.document.ket=candidate;const applied=await service.commit('session-a',command),retry=await service.commit('session-a',command);
     assert.equal(applied.token,retry.token);assert.equal(JSON.parse(applied.document.ket).mol0.atoms.length,3);assert.equal(applied.document.savedVersion,2);
+  } finally {await service.drain();if(!resolve(dir).startsWith(base+sep))throw new Error('Unsafe cleanup');await rm(dir,{recursive:true,force:true});}
+});
+
+test('region propyl anchor is frozen; recoverable proposal errors clear and repeated commits add the chain only once', async () => {
+  const base=resolve(tmpdir()),dir=await mkdtemp(join(base,'chem-propyl-'));
+  const store=new DocumentStore(),service=new AnnotationService({store,directoryFor:async()=>dir,prompt:async()=>({accepted:true})});
+  const document={schemaVersion:1,documentId:'propyl-test',revision:1,ket,title:'丙基',language:'zh-CN'};
+  const snapshot={documentId:document.documentId,revision:1,instanceId:'frame-propyl',ket,rawKet:ket,atoms:[{id:37,element:'C'},{id:99,element:'C'}],bonds:[{id:81,begin:37,end:99,type:1,stereo:0}],selection:{atoms:[37,99],bonds:[81]},attachmentAtom:99,atomAddresses:{37:{molecule:'mol0',index:0},99:{molecule:'mol0',index:1}},bondAddresses:{81:{molecule:'mol0',index:0}}};
+  try {
+    const saved=await store.save(dir,'session-a',document,null),id=randomUUID(),signal=new AbortController().signal;
+    await service.create('session-a',{submissionId:id,instruction:'添加丙基',snapshot,baseToken:saved.token},signal);
+    await service.presented('session-a',id);
+    service.updateFrame('session-a',{...snapshot,selection:{atoms:[37],bonds:[]},attachmentAtom:37});
+    assert.equal(JSON.parse((await service.context('session-a',id)).context).attachmentAtom,99);
+    await assert.rejects(service.propose('session-a',{annotationId:id,operation:'attach_fragment',targetAtom:37,fragment:'丙基'},signal),e=>e.code==='out_of_selection');
+    const args={annotationId:id,operation:'attach_fragment',targetAtom:99,fragment:'丙基',reason:'添加正丙基'},pending=service.propose('session-a',args,signal);
+    for(let i=0;i<50&&(await service.detail('session-a',id)).status!=='validating';i++)await new Promise(r=>setTimeout(r,10));
+    const detail=await service.detail('session-a',id),candidate=executePatch(detail.frozen,detail.patch).ket;
+    assert.equal(detail.lastProposalError,undefined);assert.equal(detail.patch.fragment,'n-propyl');
+    assert.deepEqual(JSON.parse(candidate).mol0.bonds.slice(1).map(b=>b.atoms),[[1,2],[2,3],[3,4]]);
+    await service.validation('session-a',{annotationId:id,instanceId:snapshot.instanceId,valid:true,candidateKet:candidate});await pending;
+    await assert.rejects(service.reject('session-a',{annotationId:id,code:'clarification_required',reason:'不应取消已有预览'}),e=>e.code==='annotation_inactive');
+    await service.turnEnded('session-a');assert.equal((await service.detail('session-a',id)).status,'proposed');
+    const command={annotationId:id,instanceId:snapshot.instanceId,document:{...document,revision:2,ket:candidate}};
+    const applied=await service.commit('session-a',command),retry=await service.commit('session-a',command);
+    assert.equal(applied.token,retry.token);assert.equal(JSON.parse(retry.document.ket).mol0.atoms.length,5);
+  } finally {await service.drain();if(!resolve(dir).startsWith(base+sep))throw new Error('Unsafe cleanup');await rm(dir,{recursive:true,force:true});}
+});
+
+test('proposal and Agent rejection reasons persist in the panel after turn end without changing the saved document', async () => {
+  const base=resolve(tmpdir()),dir=await mkdtemp(join(base,'chem-rejection-'));
+  const store=new DocumentStore(),service=new AnnotationService({store,directoryFor:async()=>dir,prompt:async()=>({accepted:true})});
+  const document={schemaVersion:1,documentId:'rejection-test',revision:1,ket,title:'拒绝反馈',language:'zh-CN'};
+  const snapshot={documentId:document.documentId,revision:1,instanceId:'frame-reject',ket,rawKet:ket,atoms:[{id:37,element:'C'},{id:99,element:'C'}],bonds:[{id:81,begin:37,end:99,type:1,stereo:0}],selection:{atoms:[37],bonds:[]},atomAddresses:{37:{molecule:'mol0',index:0},99:{molecule:'mol0',index:1}},bondAddresses:{81:{molecule:'mol0',index:0}}};
+  try {
+    const saved=await store.save(dir,'session-a',document,null),signal=new AbortController().signal;
+    const create=async instruction=>{const id=randomUUID();await service.create('session-a',{submissionId:id,instruction,snapshot,baseToken:saved.token},signal);await service.presented('session-a',id);return id;};
+    const id=await create('添加苄基');
+    await assert.rejects(service.propose('session-a',{annotationId:id,operation:'attach_fragment',targetAtom:37,fragment:'benzyl'},signal),e=>e.code==='unsupported_fragment');
+    await service.turnEnded('session-a');
+    let record=(await service.list('session-a')).find(a=>a.id===id);
+    assert.equal(record.status,'failed');assert.equal(record.errorCode,'unsupported_fragment');assert.match(record.message,/当前支持.*正丙基/);
+    const id2=await create('添加 C3H7');
+    await assert.rejects(service.reject('session-b',{annotationId:id2,code:'ambiguous_fragment',reason:'请明确异构体'}),e=>e.code==='annotation_not_found');
+    await assert.rejects(service.reject('session-a',{annotationId:id2,code:'unknown',reason:'失败'}),e=>e.code==='invalid_rejection');
+    await service.reject('session-a',{annotationId:id2,code:'ambiguous_fragment',reason:'请明确要正丙基还是异丙基，再重新提交。'});
+    await service.turnEnded('session-a');record=(await service.list('session-a')).find(a=>a.id===id2);
+    assert.equal(record.errorCode,'ambiguous_fragment');assert.equal(record.message,'请明确要正丙基还是异丙基，再重新提交。');
+    assert.equal((await store.read(dir,'session-a')).token,saved.token);
   } finally {await service.drain();if(!resolve(dir).startsWith(base+sep))throw new Error('Unsafe cleanup');await rm(dir,{recursive:true,force:true});}
 });

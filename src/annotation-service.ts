@@ -3,9 +3,12 @@ import { readFile, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DocumentError, DocumentStore } from './document-store';
 import { selectionAddresses, normalizePatch, verifyMolecularPatch, patchSummary, operations, fragments } from './molecular-patch';
+import { fragmentCatalog, fragmentList } from './fragments';
+import { verifyEditIntent } from './edit-intent';
 
 export const elements = ['C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I'];
-const active = new Set(['submitting', 'queued', 'validating', 'proposed']);
+export const rejectionCodes = ['unsupported_fragment', 'unsupported_operation', 'connection_point_required', 'clarification_required', 'ambiguous_fragment'];
+const active = new Set(['submitting', 'queued', 'validating', 'proposed', 'needs_clarification']);
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 export function verifyPatch(before: string, after: string, address: any, element: string) {
   let a: any, b: any;
@@ -40,6 +43,7 @@ export class AnnotationService {
   readonly processId = randomUUID();
   private stopped = false;
   private watched = new Set<string>();
+  private replies = new Map<string, {rpcId: string; text: string}>();
   watches(sessionId: string) { return this.watched.has(sessionId); }
   constructor(private deps: { store: DocumentStore; directoryFor: (id: string) => Promise<string>; prompt: (request: any, signal: AbortSignal) => Promise<any> }) {}
   updateFrame(sessionId: string, snapshot: any) { if (typeof snapshot.instanceId === 'string') this.frames.set(`${sessionId}/${snapshot.instanceId}`, snapshot); }
@@ -80,16 +84,26 @@ export class AnnotationService {
     if (!saved.document || saved.document.documentId !== a.frozen.documentId || saved.document.revision !== a.frozen.revision || saved.token !== a.baseToken || !frame || frame.revision !== a.frozen.revision || hash(frame.rawKet || '') !== hash(a.frozen.rawKet)) throw new DocumentError('stale_annotation', '结构或文档已经变化，请重新选择并提交批注。');
     return saved;
   }
-  private projection(a: any) { const { frozen, candidateKet, baseToken, processId, ...rest } = a; return { ...rest, target: frozen.target, documentId: frozen.documentId, baseRevision: frozen.revision, instanceId: frozen.instanceId }; }
+  private projection(a: any) { const { frozen, candidateKet, baseToken, processId, ...rest } = a; return { ...rest, target: frozen.target, selection:frozen.selection, documentId: frozen.documentId, baseRevision: frozen.revision, instanceId: frozen.instanceId }; }
   async list(sessionId: string) { return this.transaction(sessionId, async records => {
     let expired = false;
     for (const a of records) if (active.has(a.status)) { try { await this.current(a); } catch (e: any) { a.status = 'stale'; a.message = e.message; expired = true; this.waiters.get(a.id)?.(); } }
-    for (const a of records) if (['submitting', 'queued', 'validating'].includes(a.status) && Date.now() - Date.parse(a.createdAt) > 7 * 60_000) { a.status = 'failed'; a.message = '等待 Agent 超时，请查看聊天后重新提交。'; expired = true; }
+    for (const a of records) if (['submitting', 'queued', 'validating'].includes(a.status) && Date.now() - Date.parse(a.updatedAt||a.createdAt) > 7 * 60_000) { a.status = 'failed'; a.message = '等待 Agent 超时，可补充要求继续此批注。'; expired = true; }
     if (expired) await this.write(sessionId, records);
     return records.map(a => this.projection(a));
   }); }
   async presented(sessionId: string, id: string) { return this.transaction(sessionId, async records => { const a = records.find(a => a.id === id); if (a && active.has(a.status)) { a.presented = true; await this.write(sessionId, records); } }); }
-  async turnEnded(sessionId: string) { return this.transaction(sessionId, async records => { let changed = false; for (const a of records) if (a.presented && ['submitting', 'queued'].includes(a.status)) { a.status = 'failed'; a.message = 'Agent 未生成修改预览，请查看聊天后重试。'; changed = true; } if (changed) await this.write(sessionId, records); }); }
+  async userMessage(sessionId: string, data: any) {
+    return this.transaction(sessionId, async records => {
+      const id=data?.source?.rpcId,a=records.find(a=>a.id===id||a.turnRequestId===id);
+      if(a&&active.has(a.status)){a.presented=true;await this.write(sessionId,records);return;}
+      if(a)return;
+      if(data?.source?.kind!=='user'||typeof id!=='string'||!Array.isArray(data.content))return;
+      const text=data.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text||'').join('\n').trim();
+      if(text&&text.length<=2000)this.replies.set(sessionId,{rpcId:id,text});
+    });
+  }
+  async turnEnded(sessionId: string) { return this.transaction(sessionId, async records => { let changed = false; for (const a of records) if (a.presented && ['submitting', 'queued'].includes(a.status)) { a.status = 'failed'; a.errorCode = a.lastProposalError?.code || 'no_proposal'; a.message = a.lastProposalError?.message || 'Agent 未生成修改预览，请查看聊天中的说明，补充要求后重新提交。'; changed = true; } if (changed) await this.write(sessionId, records); }); }
   async create(sessionId: string, payload: any, signal: AbortSignal) {
     this.watched.add(sessionId);
     const id = payload.submissionId;
@@ -97,34 +111,37 @@ export class AnnotationService {
     const a = await this.transaction(sessionId, async records => {
       const repeated = records.find(a => a.id === id); if (repeated) { if (repeated.instruction !== payload.instruction.trim()) throw new DocumentError('request_conflict', '批注请求标识已被使用。'); return repeated; }
       if (records.some(a => active.has(a.status))) throw new DocumentError('annotation_busy', '请先完成或取消当前批注。');
-      const s = payload.snapshot, targetId = s?.selection?.atoms?.[0];
+      const s = payload.snapshot, targetId = s?.attachmentAtom ?? (s?.selection?.atoms?.length === 1 ? s.selection.atoms[0] : undefined);
       const target = s?.atoms?.find((a: any) => a.id === targetId);
       if (!s?.selection || !Array.isArray(s.selection.atoms) || !Array.isArray(s.selection.bonds) || !(s.selection.atoms.length || s.selection.bonds.length) || typeof s.rawKet !== 'string' || s.rawKet.length > 2_000_000 || typeof s.instanceId !== 'string') throw new DocumentError('invalid_selection', '请选择普通原子、键或局部片段。');
       const saved = await this.deps.store.read(await this.deps.directoryFor(sessionId), sessionId);
       if (!saved.document || saved.token !== payload.baseToken || saved.document.documentId !== s.documentId || saved.document.revision !== s.revision) throw new DocumentError('stale_annotation', '请等待结构保存完成后重新提交批注。');
       selectionAddresses(s);
+      if (s.attachmentAtom !== undefined && (!Number.isSafeInteger(s.attachmentAtom) || !s.selection.atoms.includes(s.attachmentAtom))) throw new DocumentError('invalid_selection', '连接点必须位于本次冻结选区内。');
       this.updateFrame(sessionId, s);
       const created = { id, sessionId, processId: this.processId, instruction: payload.instruction.trim(), status: 'submitting', createdAt: new Date().toISOString(), baseToken: saved.token, frozen: structuredClone({ ...s, target }), message: '正在提交给 Agent…' };
-      records.push(created); await this.write(sessionId, records); return created;
+      records.push(created); await this.write(sessionId, records); this.replies.delete(sessionId); return created;
     });
-    if (a.status === 'submitting') {
-      try {
-        const content = `用户从分子画布提交了一条局部编辑批注。\n批注 ID：${id}\n用户要求：${a.instruction}\n先调用 chem_get_context 核对冻结选区，再调用 chem_propose_edit。operation 支持 replace_atom（targetAtom、element）、change_bond（targetBond、bondType=1/2/3）、attach_fragment（targetAtom、fragment=OH/CH3/NH2/F/Cl）、delete_selection（删除整个冻结选区，不另传目标）。每次只生成一个操作并提供简短 reason。添加和替换含义不同；要求有歧义时先澄清。\n不要用文件工具、shell、完整 SMILES 或鼠标改分子，不要自动应用。预览通过后告诉用户在分子面板点击“应用修改”。不支持的操作请说明，不要猜测。`;
-        await this.deps.prompt({ sessionId, requestId: id, content: [{ type: 'text', text: content }], mode: 'followup', clientTimeZone: 'Asia/Shanghai' }, signal);
-        await this.transaction(sessionId, async records => { const live = this.find(records, id); if (live.status === 'submitting') { live.status = 'queued'; live.message = 'Agent 正在处理批注…'; await this.write(sessionId, records); } });
-      } catch (e: any) { await this.transaction(sessionId, async records => { const live = this.find(records, id); if (live.status === 'submitting') { live.status = 'failed'; live.message = `提交失败：${e.message}`; await this.write(sessionId, records); } }); throw e; }
-    }
+    if (a.status === 'submitting') await this.enqueue(sessionId,a,signal);
     return this.projection(a);
+  }
+  private async enqueue(sessionId:string,a:any,signal:AbortSignal) {
+    const id=a.id;
+    try {
+      const content=`用户从分子画布提交了一条局部编辑批注。\n批注 ID：${id}\n用户要求：${a.instruction}${a.clarification?`\n用户补充（按实际原文）：${a.clarification}`:''}\n先调用 chem_get_context 核对冻结选区。工具支持 replace_atom（targetAtom、element）、change_bond（targetBond、bondType=1/2/3）、attach_fragment（targetAtom、fragment）、replace_fragment（fragment，替换整个连通选区，限一个普通单键出口）、delete_selection，以及 batch（edits 数组，2 至 8 个上述操作）。添加和替换含义不同。基团支持 ${fragmentList()}，ID/别名以 fragmentTemplates 为准。“丙基”默认正丙基，C3H7/丙烷等有歧义先澄清。添加使用 attachmentAtom，不猜连接点。\n必须完整覆盖用户要求；“把 O 换为 C，然后外接苯环”用一次 batch.edits 提交 replace_atom 和 attach_fragment，整组验证、一次预览/应用/撤销。只支持一部分时先澄清，不能擅自把丙基换成甲基、把替换当添加，或只做前半部分。后端会核对完整计划。\n需要澄清时调用 chem_reject_edit（clarification_required/ambiguous_fragment/connection_point_required）进入待补充状态。用户在聊天补充后先读 chem_get_context，再调用 chem_continue_edit，userReply 照抄 latestUserReply，之后重新提案。已应用、取消、过期批注不能续接。\n只使用 chem_* 工具，不查 Blender 算子、不用 shell/文件/鼠标或完整 SMILES 覆盖分子，不自动应用。回复用简体中文，简短说明结果和下一步，不反复列工具参数或推销替代目标。预览通过后提示在面板点击“应用修改”。`;
+      await this.deps.prompt({sessionId,requestId:a.turnRequestId||id,content:[{type:'text',text:content}],mode:'followup',clientTimeZone:'Asia/Shanghai'},signal);
+      await this.transaction(sessionId,async records=>{const live=this.find(records,id);if(live.status==='submitting'){live.status='queued';live.message='Agent 正在处理批注…';await this.write(sessionId,records);}});
+    } catch(e:any){await this.transaction(sessionId,async records=>{const live=this.find(records,id);if(live.status==='submitting'){live.status='failed';live.message=`提交失败：${e.message}`;await this.write(sessionId,records);}});throw e;}
   }
   async context(sessionId: string, id: string, full = false) {
     return this.transaction(sessionId, async records => {
-      const a = this.find(records, id); if (!active.has(a.status)) throw new DocumentError('annotation_inactive', '批注已结束或失效，请不要继续生成修改。');
+      const a = this.find(records, id); if (!active.has(a.status)&&a.status!=='failed') throw new DocumentError('annotation_inactive', '批注已应用、取消或失效，请重新选择，不要复用旧目标。');
       await this.current(a);
       const selected = new Set(a.frozen.selection.atoms), selectedBonds = new Set(a.frozen.selection.bonds);
       for (const b of a.frozen.bonds) if (selectedBonds.has(b.id)) { selected.add(b.begin); selected.add(b.end); }
       const bonds = a.frozen.bonds.filter((b: any) => selected.has(b.begin) || selected.has(b.end));
       const neighborhood = new Set([...selected, ...bonds.flatMap((b: any) => [b.begin, b.end])]);
-      return { annotationId: id, status: a.status, context: JSON.stringify({ documentId: a.frozen.documentId, baseRevision: a.frozen.revision, instruction: a.instruction, selectedAtom: a.frozen.target, selection: a.frozen.selection, boundaryBonds: bonds.filter((b: any) => selected.has(b.begin) !== selected.has(b.end)), atoms: full ? a.frozen.atoms : a.frozen.atoms.filter((x: any) => neighborhood.has(x.id)), bonds: full ? a.frozen.bonds : bonds, atomCount: a.frozen.atoms.length, allowedOperations: operations, allowedElements: elements, allowedFragments: Object.keys(fragments), allowedBondTypes: [1,2,3] }) };
+      return { annotationId: id, status: a.status, context: JSON.stringify({ documentId: a.frozen.documentId, baseRevision: a.frozen.revision, instruction: a.instruction, clarification: a.clarification ?? null, latestUserReply: this.replies.get(sessionId)?.text ?? null, canContinue: ['failed','needs_clarification'].includes(a.status), continuationRule: '补充后先调用 chem_continue_edit，userReply 必须照抄 latestUserReply；已应用/取消/过期批注不能继续。', selectedAtom: a.frozen.target, attachmentAtom: a.frozen.target?.id ?? null, attachmentCandidates: a.frozen.selection.atoms, selection: a.frozen.selection, boundaryBonds: bonds.filter((b: any) => selected.has(b.begin) !== selected.has(b.end)), atoms: full ? a.frozen.atoms : a.frozen.atoms.filter((x: any) => neighborhood.has(x.id)), bonds: full ? a.frozen.bonds : bonds, atomCount: a.frozen.atoms.length, allowedOperations: operations, allowedElements: elements, allowedFragments: Object.keys(fragments), fragmentTemplates: fragmentCatalog(), fragmentNaming: '丙基/propyl 默认正丙基；C3H7 需澄清正丙基或异丙基。', completePlanRule: '必须覆盖整条要求，复合修改用 batch.edits（2 至 8 步），不支持时暂停并澄清；不能擅自提交替代基团或前半部分。', allowedBondTypes: [1,2,3] }) };
     });
   }
   async propose(sessionId: string, args: any, signal: AbortSignal) {
@@ -132,8 +149,18 @@ export class AnnotationService {
       const a = this.find(records, args.annotationId);
       if (a.status === 'proposed' && JSON.stringify(a.patch) === JSON.stringify(normalizePatch(a.frozen, args))) return;
       if (!['queued', 'submitting'].includes(a.status)) throw new DocumentError('annotation_inactive', '这条批注已有方案或已结束。');
-      await this.current(a);
-      a.patch = normalizePatch(a.frozen, args);
+      try {
+        await this.current(a);
+        a.patch = normalizePatch(a.frozen, args);
+        verifyEditIntent(a.instruction,a.patch,a.clarification);
+        delete a.lastProposalError; delete a.errorCode;
+      } catch (e: any) {
+        delete a.patch;
+        a.lastProposalError = { code: e.code || 'invalid_patch', message: e.message };
+        a.message = e.message;
+        if (e.code === 'stale_annotation') { a.status = 'stale'; a.errorCode = e.code; }
+        await this.write(sessionId, records); throw e;
+      }
       a.status = 'validating'; a.message = '正在检查候选结构…'; await this.write(sessionId, records);
     });
     const deadline = Date.now() + 25000;
@@ -151,6 +178,35 @@ export class AnnotationService {
       throw e;
     }
   }
+  async reject(sessionId: string, args: any) {
+    if (!rejectionCodes.includes(args.code) || typeof args.reason !== 'string' || !args.reason.trim() || args.reason.length > 800) throw new DocumentError('invalid_rejection', '请提供具体的无法修改原因和下一步（不超过 800 字）。');
+    return this.transaction(sessionId, async records => {
+      const a = this.find(records, args.annotationId);
+      if (!['queued', 'submitting'].includes(a.status)) throw new DocumentError('annotation_inactive', '这条批注已有预览或已结束。');
+      await this.current(a);
+      a.status = ['clarification_required','ambiguous_fragment','connection_point_required'].includes(args.code)?'needs_clarification':'failed'; a.errorCode = args.code; a.message = args.reason.trim();
+      await this.write(sessionId, records);
+      return { annotationId: a.id, status: a.status, summary: a.message };
+    });
+  }
+  async continueEdit(sessionId: string,args: any,signal?: AbortSignal,fromPanel=false) {
+    const a=await this.transaction(sessionId,async records=>{
+      const a=this.find(records,args.annotationId);
+      if(!['needs_clarification','failed'].includes(a.status))throw new DocumentError('annotation_inactive','只能继续待补充或失败的批注，已应用、取消或已有预览的批注不能复用。');
+      if(fromPanel&&args.instanceId!==a.frozen.instanceId)throw new DocumentError('wrong_editor','请在原批注的编辑器补充要求。');
+      await this.current(a);
+      if(typeof args.userReply!=='string'||!args.userReply.trim()||args.userReply.length>1000)throw new DocumentError('invalid_clarification','请补充具体修改要求（不超过 1000 字）。');
+      const reply=this.replies.get(sessionId);
+      if(!fromPanel&&(!reply||reply.text!==args.userReply.trim()))throw new DocumentError('unverified_clarification','补充内容必须与当前聊天中实际收到的用户消息一致，不能由 Agent 改写目标。');
+      if(fromPanel&&args.attachmentAtom!==undefined){if(!a.frozen.selection.atoms.includes(args.attachmentAtom))throw new DocumentError('out_of_selection','连接点必须位于原批注的冻结选区内。');a.frozen.attachmentAtom=args.attachmentAtom;a.frozen.target=a.frozen.atoms.find((x:any)=>x.id===args.attachmentAtom);}
+      a.clarification=args.userReply.trim();a.status=fromPanel?'submitting':'queued';a.presented=!fromPanel;a.updatedAt=new Date().toISOString();
+      a.message='已收到补充，正在重新生成完整修改预览…';a.turnRequestId=fromPanel?randomUUID():reply!.rpcId;
+      delete a.patch;delete a.candidateKet;delete a.lastProposalError;delete a.errorCode;this.replies.delete(sessionId);
+      await this.write(sessionId,records);return a;
+    });
+    if(fromPanel)await this.enqueue(sessionId,a,signal!);
+    return {annotationId:a.id,status:a.status,summary:a.message};
+  }
   async validation(sessionId: string, payload: any) {
     return this.transaction(sessionId, async records => {
       const a = this.find(records, payload.annotationId);
@@ -160,7 +216,7 @@ export class AnnotationService {
         if (!payload.valid) throw new DocumentError('chemical_invalid', String(payload.message || '结构检查未通过。').slice(0, 800));
         if (a.patch.operation === 'replace_atom') verifyPatch(a.frozen.rawKet, payload.candidateKet, a.frozen.targetAddress, a.patch.element); else verifyMolecularPatch(a.frozen, a.patch, payload.candidateKet);
         a.candidateKet = payload.candidateKet; a.status = 'proposed'; a.message = '预览已通过检查，等待你应用。';
-      } catch (e: any) { a.status = e.code === 'stale_annotation' ? 'stale' : 'failed'; a.message = e.message; }
+      } catch (e: any) { a.status = e.code === 'stale_annotation' ? 'stale' : 'failed'; a.errorCode = e.code || 'preview_rejected'; a.message = e.message; }
       await this.write(sessionId, records); this.waiters.get(a.id)?.(); return this.projection(a);
     });
   }

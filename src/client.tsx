@@ -63,7 +63,7 @@ function Body({ useTabInfo, sessionId, connection, guards, carry, workspaceMode 
         return;
       }
       if (m.epoch !== epoch.current) return;
-      if (m.type === 'command' && ['annotate', 'annotation-detail', 'preview', 'apply', 'cancel'].includes(m.method)) {
+      if (m.type === 'command' && ['annotate', 'continue-annotation', 'annotation-detail', 'preview', 'apply', 'cancel'].includes(m.method)) {
         const captured = epoch.current;
         serial.current = serial.current.catch(() => {}).then(async () => {
           if (captured !== epoch.current) return;

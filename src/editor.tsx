@@ -6,6 +6,7 @@ import { fromAtomsAttrs, fromNewCanvas, Coordinates, KetcherAsyncEvents, KetSeri
 import 'ketcher-react/dist/index.css';
 import './editor.css';
 import { executePatch, verifyMolecularPatch, patchSummary } from './molecular-patch';
+import { fragments, fragmentName, fragmentList } from './fragments';
 import { samples } from './samples';
 import { localizeEditor } from './localization';
 
@@ -60,7 +61,10 @@ function App() {
   const publishTimer = React.useRef<any>();
   const dispose = React.useRef<() => void>();
   const selectedRef = React.useRef<any>({ atoms: [], bonds: [] });
+  const attachmentRef = React.useRef<number | null>(null);
+  const [attachmentAtom, setAttachmentAtom] = React.useState<number | null>(null);
   const [instruction, setInstruction] = React.useState('把选中的碳原子替换为氮原子');
+  const [clarification, setClarification] = React.useState('');
   const [annotations, setAnnotations] = React.useState<any[]>([]);
   const [annotationBusy, setAnnotationBusy] = React.useState(false);
   const [preview, setPreview] = React.useState<any>(null);
@@ -125,6 +129,7 @@ function App() {
   function clearPreview() { previewRef.current = null; setPreview(null); for (const url of previewUrls.current) URL.revokeObjectURL(url); previewUrls.current = []; }
   async function captureSnapshot(withTarget = false) {
     const base = revision.current, edit = generation.current, frozenSelection = structuredClone(selectedRef.current);
+    const frozenAttachment = attachmentRef.current;
     const ket = await k.current.getKet();
     if (base !== revision.current || edit !== generation.current) throw new Error('结构正在变化，请重新选择。');
     const struct = k.current.editor.struct(), atoms: any[] = [], bonds: any[] = [];
@@ -162,7 +167,7 @@ function App() {
       });
       if (base !== revision.current || edit !== generation.current) throw new Error('结构正在变化，请重新选择。');
     }
-    return { documentId: documentId.current, revision: base, ket, rawKet, atoms, bonds, selection: frozenSelection, instanceId: epoch.current, ...(atomAddresses ? { atomAddresses, bondAddresses, targetAddress, aromaticBonds } : {}) };
+    return { documentId: documentId.current, revision: base, ket, rawKet, atoms, bonds, selection: frozenSelection, instanceId: epoch.current, ...(frozenAttachment !== null ? { attachmentAtom: frozenAttachment } : {}), ...(atomAddresses ? { atomAddresses, bondAddresses, targetAddress, aromaticBonds } : {}) };
   }
   async function submitAnnotation() {
     setAnnotationBusy(true); setError('');
@@ -232,6 +237,14 @@ function App() {
     finally { restoring.current = false; setBusy(false); selectionChanged(); await publish(); }
   }
   async function cancelAnnotation(id: string) { try { await command('cancel', { annotationId: id }); clearPreview(); setNotice('批注已取消，原结构保持。'); } catch (e: any) { setError(e.message); } }
+  async function continueAnnotation(record:any) {
+    setAnnotationBusy(true);setError('');
+    try {
+      const anchor=attachmentRef.current;
+      await command('continue-annotation',{annotationId:record.id,userReply:clarification,...(anchor!==null&&record.selection.atoms.includes(anchor)?{attachmentAtom:anchor}:{})});
+      setClarification('');setNotice('已发送补充要求，仍使用原批注的连接位置。');
+    } catch(e:any){setError(e.message);}finally{setAnnotationBusy(false);}
+  }
   function loadMolecule(text: string) {
     // In 3.7.0 setMolecule resolves before runAsyncAction has filled the canvas.
     // Wait for that editor instance's completion event instead of its early promise.
@@ -288,6 +301,9 @@ function App() {
     const struct = k.current?.editor.struct();
     const next = { atoms: [...(s.atoms || [])], bonds: [...(s.bonds || [])],
       labels: (s.atoms || []).map((id: number) => ({ id, element: struct?.atoms.get(id)?.label })) };
+    const sameAtoms = next.atoms.length === selectedRef.current.atoms.length && next.atoms.every(id => selectedRef.current.atoms.includes(id));
+    const anchor = next.atoms.length === 1 ? next.atoms[0] : sameAtoms && next.atoms.includes(attachmentRef.current) ? attachmentRef.current : null;
+    attachmentRef.current = anchor; setAttachmentAtom(anchor);
     selectedRef.current = next; setSelected(next);
     clearTimeout(publishTimer.current);
     publishTimer.current = setTimeout(() => publish().catch(e => setError(e.message)), 120);
@@ -419,7 +435,10 @@ function App() {
   }, []);
   const buttons = React.useMemo(() => ({ miew: { hidden: true }, recognize: { hidden: true }, about: { hidden: true }, help: { hidden: true }, fullscreen: { hidden: true } }), []);
   const currentAnnotation = [...annotations].reverse().find(a => a.documentId === documentId.current);
-  const pendingAnnotation = annotations.some(a => ['submitting', 'queued', 'validating', 'proposed'].includes(a.status));
+  const pendingAnnotation = annotations.some(a => ['submitting', 'queued', 'validating', 'proposed', 'needs_clarification'].includes(a.status));
+  const resumable = currentAnnotation&&['failed','needs_clarification'].includes(currentAnnotation.status)&&currentAnnotation.instanceId===epoch.current&&currentAnnotation.baseRevision===revision.current;
+  const attachmentSelection = resumable?currentAnnotation.selection:selected;
+  const processingAnnotation=annotations.some(a=>['submitting','queued','validating','proposed'].includes(a.status));
   const toolsLength = wide ? (toolsSize.width || 320) : (toolsSize.height || (innerHeight <= 650 ? 220 : 230));
   const workspaceLength = wide ? (workspace.current?.clientWidth || innerWidth) : (workspace.current?.clientHeight || innerHeight);
   return <main className={`chem-app${primaryMode ? ' chem-main-mode' : ''}${focused ? ' chem-focused' : ''}`}>
@@ -433,9 +452,17 @@ function App() {
     <div className="chem-footer"><section className="chem-selection" aria-label="选区操作"><div className="chem-selection-info"><strong>{selected.labels?.length ? selected.labels.map((a: any) => `${a.element} #${a.id}`).join('、') : selected.bonds.length ? `已选 ${selected.bonds.length} 根键` : '尚未选择原子'}</strong><span>结构 v{version}</span></div>
       <div className="chem-actions"><label>替换为 <select value={element} onChange={e => setElement(e.target.value)} disabled={busy}>{elementChoices.map(v => <option key={v}>{v}</option>)}</select></label><button className="chem-primary" disabled={!ready || busy || selected.atoms.length !== 1 || selected.bonds.length !== 0} onClick={replace}>替换选中原子</button><button disabled={!ready || busy} onClick={() => { k.current.editor.undo(); selectionChanged(); setNotice('已撤销一步。'); }}>撤销</button><button disabled={!ready || busy} onClick={() => { k.current.editor.redo(); selectionChanged(); setNotice('已重做一步。'); }}>重做</button><details><summary>导出</summary><div>{(['project', 'ket', 'mol', 'smiles', 'svg'] as const).map(v => <button key={v} disabled={!ready || busy} onClick={() => exportFile(v)}>{v === 'project' ? '项目文档' : v.toUpperCase()}</button>)}</div></details><details className="chem-document-actions"><summary>保存与恢复</summary><div><button disabled={!ready || busy || !managed.current || saveConflict} onClick={() => publish(true)}>立即保存</button><button disabled={!ready || busy || !managed.current} onClick={() => { if (!dirty.current || confirm('重新载入将替换当前未保存的画布，请先导出需要保留的结构。是否继续？')) post({ type: 'reload' }); }}>重新载入已保存版本</button></div></details></div>
       <p className={error || saveError ? 'chem-error' : 'chem-notice'} role={error || saveError ? 'alert' : 'status'}>{busy ? '正在处理结构…' : error || saveError || notice}</p></section>
-    <section className="chem-annotation" aria-label="Agent 批注"><div className="chem-annotation-heading"><label htmlFor="annotation">对选区的批注</label><details className="chem-shortcuts"><summary>快捷批注</summary><div className="chem-actions" aria-label="批注快捷填入">{['添加 OH', '添加 CH3', '添加 NH2', '添加 F', '添加 Cl', '改成双键', '删除选区'].map(text => <button key={text} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(text)}>{text}</button>)}</div></details></div><div className="chem-note-row"><textarea id="annotation" maxLength={1000} rows={2} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：添加 OH、改成双键、删除选区" /><button disabled={!ready || busy || annotationBusy || pendingAnnotation || !(selected.atoms.length || selected.bonds.length) || dirty.current || !managed.current || !instruction.trim()} onClick={submitAnnotation}>交给 Agent</button></div>
-      {currentAnnotation ? <div className="chem-note-status" data-annotation-id={currentAnnotation.id} data-annotation-status={currentAnnotation.status}><span>{currentAnnotation.message}</span>{['submitting', 'queued', 'validating', 'proposed'].includes(currentAnnotation.status) ? <button disabled={busy} onClick={() => cancelAnnotation(currentAnnotation.id)}>取消批注</button> : null}</div> : <small>选择原子、键或用选择工具框选。支持改元素、改键、添加 OH/CH3/NH2/F/Cl 和删除选区。应用前会显示预览。</small>}
-      {preview && currentAnnotation?.status === 'proposed' ? <div className="chem-preview" data-preview-id={preview.id}><div><strong>{patchSummary(preview.patch, language)}</strong><span>冻结结构 v{preview.frozen.revision}</span></div><p>{preview.patch.reason}</p>{preview.existingStereo ? <p>原结构已有立体提示（保持原状）：{preview.existingStereo}</p> : null}<div className="chem-preview-grid"><figure><img src={preview.urls[0]} alt="修改前结构" /><figcaption>修改前</figcaption></figure><figure><img src={preview.urls[1]} alt="修改后预览" /><figcaption>修改后预览</figcaption></figure></div><button className="chem-primary" disabled={busy || saveConflict} onClick={applyPreview}>应用修改</button><button disabled={busy} onClick={() => cancelAnnotation(preview.id)}>取消批注</button></div> : null}
+    <section className="chem-annotation" aria-label="Agent 批注">
+      <div className="chem-annotation-heading"><label htmlFor="annotation">对选区的批注</label><details className="chem-shortcuts"><summary>快捷批注</summary><div className="chem-actions" aria-label="批注快捷填入">
+        {Object.keys(fragments).map(id => <button key={id} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(`添加 ${fragmentName(id)}`)}>{language === 'en' ? `Add ${fragmentName(id, language)}` : `添加 ${fragmentName(id)}`}</button>)}
+        {['改成双键', '删除选区'].map(text => <button key={text} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(text)}>{text}</button>)}
+      </div></details></div>
+      {attachmentSelection.atoms.length > 1 ? <div className="chem-attachment"><label htmlFor="attachment-atom">添加基团的连接原子</label><select id="attachment-atom" value={attachmentAtom ?? ''} disabled={!ready || busy || annotationBusy || processingAnnotation} onChange={e => { const id = e.target.value === '' ? null : Number(e.target.value); attachmentRef.current = id; setAttachmentAtom(id); }}><option value="">请选择连接原子</option>{attachmentSelection.atoms.map((id:number) => <option key={id} value={id}>{attachmentSelection.labels?.find((a:any)=>a.id===id)?.element||''} #{id}</option>)}</select><small>添加基团前指定一个连接点；删除和改键不需要。</small></div> : null}
+      <div className="chem-note-row"><textarea id="annotation" maxLength={1000} rows={2} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：添加正丙基、改成双键、删除选区" /><button disabled={!ready || busy || annotationBusy || pendingAnnotation || !(selected.atoms.length || selected.bonds.length) || dirty.current || !managed.current || !instruction.trim()} onClick={submitAnnotation}>交给 Agent</button></div>
+      <small>{language === 'en' ? `Groups: ${fragmentList(language)}. Select one attachment atom; propyl means n-propyl. Preview before applying.` : `可添加 ${fragmentList()}。添加时指定一个连接原子；“丙基”默认正丙基。应用前会显示预览。`}</small>
+      {currentAnnotation ? <div className={`chem-note-status${['failed', 'stale'].includes(currentAnnotation.status) ? ' chem-error' : ''}`} role="status" aria-live="polite" data-annotation-id={currentAnnotation.id} data-annotation-status={currentAnnotation.status} data-annotation-error={currentAnnotation.errorCode}><span>{currentAnnotation.message}</span>{['submitting', 'queued', 'validating', 'proposed','needs_clarification'].includes(currentAnnotation.status) ? <button disabled={busy} onClick={() => cancelAnnotation(currentAnnotation.id)}>取消批注</button> : null}</div> : null}
+      {resumable ? <div className="chem-clarification"><label htmlFor="clarification">补充修改要求</label><small>可在 DSH 聊天中补充，或在这里继续。仍使用原批注的冻结选区。</small><div className="chem-note-row"><textarea id="clarification" maxLength={1000} rows={2} value={clarification} onChange={e=>setClarification(e.target.value)} /><button disabled={busy||annotationBusy||dirty.current||saveConflict||!clarification.trim()} onClick={()=>continueAnnotation(currentAnnotation)}>继续批注</button></div></div> : null}
+      {preview && currentAnnotation?.status === 'proposed' ? <div className="chem-preview" data-preview-id={preview.id}><div><strong>{patchSummary(preview.patch, language)}</strong><span>冻结结构 v{preview.frozen.revision}</span></div><p>{preview.patch.reason}</p>{preview.patch.operation==='batch'?<p className="chem-plan-complete">{language==='en'?`All ${preview.patch.edits.length} steps will be applied and undone together.`:`全部 ${preview.patch.edits.length} 步一起应用，一步撤销。`}</p>:null}{preview.existingStereo ? <p>原结构已有立体提示（保持原状）：{preview.existingStereo}</p> : null}<div className="chem-preview-grid"><figure><img src={preview.urls[0]} alt="修改前结构" /><figcaption>修改前</figcaption></figure><figure><img src={preview.urls[1]} alt="修改后预览" /><figcaption>修改后预览</figcaption></figure></div><button className="chem-primary" disabled={busy || saveConflict} onClick={applyPreview}>应用修改</button><button disabled={busy} onClick={() => cancelAnnotation(preview.id)}>取消批注</button></div> : null}
     </section></div></div>
   </main>;
 }

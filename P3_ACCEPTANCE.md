@@ -1,5 +1,25 @@
 # P3 验收记录
 
+最新完整计划、苯基替换与聊天续接修复见 [EDIT_FLOW_ACCEPTANCE.md](./EDIT_FLOW_ACCEPTANCE.md)：20 项单元测试、六组浏览器验收和真实官方 Web Agent 验收通过。下面保留初次丙基扩展和 P3 初版的历史记录。
+
+## 2026-10-07：多原子基团与批注反馈修复
+
+本轮为 `0.1.0` 的源码修复。基团注册表增加乙基、正丙基、异丙基，模板声明原子、内部键和唯一连接点。工具 schema、Agent 上下文/提示词和快捷批注统一读取注册表。中文别名可直接提交；“丙基”按正丙基生成，预览显示明确名称，`C3H7` 单独使用需澄清异构体。
+
+框选范围与连接点分开：多原子选区在批注区指定一个连接原子，提交时一起冻结；未指定时给出具体处理办法，不再默认使用框选的第一个原子。完整基团旋转/镜像寻找可用空间，检查所有原有组件和键，不移动原有坐标。新增 `chem_reject_edit` 让 Agent 将不支持或需要澄清的原因写入面板；执行器失败原因在回合结束后保留，同回合纠正参数成功则清除旧错误。
+
+当前验证：
+
+- 构建通过；13 项单元测试全部通过，包括正/异丙基拓扑、隐式氢、未选结构保护、冻结连接点、空间不足、具体失败原因及重试只添加一次。
+- P0、P1、P2、P3 和主工作区响应布局浏览器验收均返回 `ALL-PASS`。P3 新增八种基团、框选后指定非首个连接点、异步改选保持原连接点、一步撤销，以及不支持基团的面板反馈。
+- 隔离的官方 DSH Web 中由真实 Agent 处理“加一个丙基”和“添加异丙基”，核对三碳链/支链结构，预览保持原画布，应用并保存后一步撤销恢复；“添加苯基”通过 `chem_reject_edit` 在面板给出具体原因，原画布保持。最终判据：`ALL-PASS: real DSH Agent propyl/isopropyl preview/apply/save/undo and rejection feedback`。
+
+真实验证脚本：`scripts/fragment-real-agent-test.mjs`。本地证据：`test-results/propyl-real-agent.json`、`propyl-real-normal-preview.png`、`propyl-real-iso-preview.png`；正常丙基批注 `c72909e5-d61a-4cac-bf92-e4c9c5da24c5`，异丙基批注 `92488dff-c502-4b72-95b4-5c8d84e109a5`。临时 Web 服务已停止，凭据副本已清空；验证 HOME 移入本地忽略的 `test-results/propyl-validation-profile` 存档。
+
+Desktop profile 当前链接此源码目录，构建已更新；本轮没有重启用户正在使用的 Desktop，也没有做新增能力的原生窗口验收。需完整退出并重新打开 DSH 加载新宿主工具和编辑器。
+
+## 2026-10-05：初版验收
+
 日期：2026-10-05。版本：`dsh-chem-editor 0.1.0`。
 
 ## 实现

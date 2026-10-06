@@ -1,6 +1,12 @@
 // Presentation-only translations for pinned Ketcher 3.7.0. Chemical values,
 // input values, object IDs and serialized data are never translated.
+import { fragments, fragmentName } from './fragments';
 const labels: Record<string, string> = {
+  ...Object.fromEntries(Object.keys(fragments).map(id => [`Add ${fragmentName(id, 'en')}`, `添加 ${fragmentName(id)}`])),
+  'Attachment atom for adding a group': '添加基团的连接原子', 'Choose an attachment atom': '请选择连接原子',
+  'Clarify the edit': '补充修改要求', 'Continue annotation': '继续批注',
+  'Reply in DSH chat or continue here. The original frozen selection is retained.': '可在 DSH 聊天中补充，或在这里继续。仍使用原批注的冻结选区。',
+  'Choose an attachment point before adding a group; deletion and bond changes do not need one.': '添加基团前指定一个连接点；删除和改键不需要。',
   'Clear Canvas': '清空画布', 'Open…': '打开…', 'Open...': '打开…', 'Save As…': '另存为…', 'Save as...': '另存为…',
   'Atom Properties': '原子属性', 'Bond Properties': '键属性', 'Undo': '撤销', 'Redo': '重做', 'Cut': '剪切', 'Copy': '复制',
   'Copy Image': '复制图片', 'Copy as MOL': '复制为 MOL', 'Copy as KET': '复制为 KET', 'Paste': '粘贴', 'About': '关于',
@@ -79,8 +85,7 @@ const labels: Record<string, string> = {
   'Save and restore': '保存与恢复', 'Quick annotations': '快捷批注',
   'Agent annotation': 'Agent 批注', 'Annotation for the selection': '对选区的批注',
   'Select atoms, bonds or a region to preview a local edit with the Agent.': '选择原子、键或框选片段，让 Agent 生成局部修改预览。',
-  'Select an atom, a bond, or box-select a region. Supports element and bond changes, OH/CH3/NH2/F/Cl addition, and deletion. Preview before applying.': '选择原子、键或用选择工具框选。支持改元素、改键、添加 OH/CH3/NH2/F/Cl 和删除选区。应用前会显示预览。',
-  'Example: add OH, change to a double bond, or delete the selection': '例如：添加 OH、改成双键、删除选区',
+  'Example: add n-propyl, change to a double bond, or delete the selection': '例如：添加正丙基、改成双键、删除选区',
   'Add OH': '添加 OH', 'Add CH3': '添加 CH3', 'Add NH2': '添加 NH2', 'Add F': '添加 F', 'Add Cl': '添加 Cl', 'Change to double bond': '改成双键', 'Delete selection': '删除选区',
   'Send to Agent': '交给 Agent', 'Cancel annotation': '取消批注', 'Apply edit': '应用修改',
   'Frozen structure v': '冻结结构 v', 'Unchanged diagnostic from the original structure:': '原结构已有立体提示（保持原状）：',

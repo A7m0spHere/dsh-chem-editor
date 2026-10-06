@@ -17,12 +17,17 @@ try {
   await load('CCNC(=O)CC(C)(C)CO');let original=await fingerprint();await bond(original.bonds[0][0]);await propose('改成双键');assert.deepEqual(await fingerprint(),original);await apply();
   let after=await fingerprint();assert.equal(after.bonds[0][1].type,2);assert.deepEqual(after.atoms,original.atoms);await undo();assert.deepEqual(await fingerprint(),original);
   console.log('PASS P3 actual bond selection, amide/branch graph, preview, one-step undo');
-  for(const fragment of ['OH','CH3','NH2','F','Cl']) {
+  for(const fragment of ['OH','CH3','NH2','F','Cl','乙基','丙基','异丙基']) {
     await select(original.atoms[0][0]);await propose('添加 '+fragment, original.atoms.at(-1)[0]);assert.deepEqual(await fingerprint(),original);await apply();
-    after=await fingerprint();assert.equal(after.atoms.length,original.atoms.length+1);assert.equal(after.bonds.length,original.bonds.length+1);assert.equal(after.bonds.at(-1)[1].begin,original.atoms[0][0]);
+    const count=fragment==='乙基'?2:['丙基','异丙基'].includes(fragment)?3:1;
+    after=await fingerprint();assert.equal(after.atoms.length,original.atoms.length+count);assert.equal(after.bonds.length,original.bonds.length+count);assert.equal(after.bonds[original.bonds.length][1].begin,original.atoms[0][0]);
+    if(count>1) {
+      const ids=after.atoms.slice(original.atoms.length).map(([id])=>id),edges=after.bonds.slice(original.bonds.length).map(([,b])=>[b.begin,b.end]);
+      assert.deepEqual(edges,[[original.atoms[0][0],ids[0]],[ids[0],ids[1]],...(count===3?[[fragment==='异丙基'?ids[0]:ids[1],ids[2]]]:[])]);
+    }
     assert.deepEqual(after.atoms.slice(0,original.atoms.length),original.atoms);await undo();assert.deepEqual(await fingerprint(),original);
   }
-  console.log('PASS all five whitelist fragments, fixed attachment, preserved canvas and repeated undo');
+  console.log('PASS all eight fragments including both propyl isomers, fixed attachment, preserved canvas and one-step undo');
   await f.getByRole('button',{name:'含手性多环示例',exact:true}).click();await f.waitForFunction(()=>window.chemP0.ketcher.editor.struct().atoms.size===21);await saved();original=await fingerprint();await select(original.atoms[0][0]);await propose('添加 OH');await apply();after=await fingerprint();assert.deepEqual(after.atoms.slice(0,original.atoms.length),original.atoms);assert.deepEqual(after.bonds.slice(0,original.bonds.length),original.bonds);await undo();assert.deepEqual(await fingerprint(),original);
   console.log('PASS chiral polycycle untouched atom/bond stereo preservation');
   await load('CCCCO');original=await fingerprint();await select(original.atoms[2][0]);await propose('删除选区');await f.locator('.chem-preview').getByText(/断开 2 根边界键/).waitFor();await apply();after=await fingerprint();assert.equal(after.atoms.length,4);assert.equal(after.bonds.length,2);await undo();assert.deepEqual(await fingerprint(),original);
@@ -34,12 +39,20 @@ try {
   // Drag a real rectangular selection over the rightmost two atoms.
   const points=await Promise.all(original.atoms.map(([id])=>point(id)));const ordered=points.map((p,i)=>({...p,id:original.atoms[i][0]})).sort((a,b)=>a.x-b.x);const region=ordered.slice(-2), left=(ordered.at(-3).x+region[0].x)/2;
   await page.mouse.move(left,Math.min(...region.map(p=>p.y))-18);await page.mouse.down();await page.mouse.move(Math.max(...region.map(p=>p.x))+18,Math.max(...region.map(p=>p.y))+18,{steps:14});await page.mouse.up();
-  const selection=await f.evaluate(()=>window.chemP0.ketcher.editor.selection());assert.equal(selection.atoms.length,2);await propose('删除选区');await apply();assert.equal((await fingerprint()).atoms.length,3);await undo();assert.deepEqual(await fingerprint(),original);
+  const selection=await f.evaluate(()=>window.chemP0.ketcher.editor.selection());assert.equal(selection.atoms.length,2);
+  await f.getByLabel('对选区的批注').fill('添加丙基');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-error="connection_point_required"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
+  const anchor=selection.atoms.at(-1);await f.getByLabel('添加基团的连接原子').selectOption(String(anchor));
+  await f.getByLabel('补充修改要求').fill('添加丙基');await f.getByRole('button',{name:'继续批注',exact:true}).click();await select(original.atoms[0][0]);await f.locator('[data-preview-id]').waitFor({timeout:40000});await f.locator('.chem-preview').getByText(/添加 正丙基/).waitFor();await page.screenshot({path:'test-results/propyl-region-preview.png'});await apply();after=await fingerprint();assert.equal(after.atoms.length,original.atoms.length+3);assert.equal(after.bonds[original.bonds.length][1].begin,anchor);await undo();assert.deepEqual(await fingerprint(),original);
+  await page.mouse.move(left,Math.min(...region.map(p=>p.y))-18);await page.mouse.down();await page.mouse.move(Math.max(...region.map(p=>p.x))+18,Math.max(...region.map(p=>p.y))+18,{steps:14});await page.mouse.up();
+  await propose('删除选区');await apply();assert.equal((await fingerprint()).atoms.length,3);await undo();assert.deepEqual(await fingerprint(),original);
+  console.log('PASS region attachment needs an explicit frozen anchor, plain propyl previews n-propyl and undoes in one step');
   console.log('PASS actual box selection and region deletion');
   await select(original.atoms[0][0]);await propose('添加 OH');await page.request.get('http://127.0.0.1:3099/test/fail-next-apply');await f.getByRole('button',{name:'应用修改',exact:true}).click();await f.getByText('模拟保存失败，原文件保持。',{exact:true}).waitFor();assert.deepEqual(await fingerprint(),original);await apply();assert.equal((await fingerprint()).atoms.length,6);await undo();assert.deepEqual(await fingerprint(),original);
   console.log('PASS rejected commit restores canvas/history; retry attaches once');
   await select(original.atoms[0][0]);await f.getByRole('button',{name:'替换选中原子',exact:true}).click();await saved();const manual=await fingerprint();await select(manual.atoms[0][0]);await propose('添加 CH3');await apply();await undo();assert.deepEqual(await fingerprint(),manual);await undo();assert.deepEqual(await fingerprint(),original);
   console.log('PASS consecutive manual and AI history');
+  await select(original.atoms[0][0]);await f.getByLabel('对选区的批注').fill('添加苄基');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-error="unsupported_fragment"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
+  console.log('PASS unsupported group explains the failure in the panel and preserves the canvas');
   await load('CC(C)(C)C');original=await fingerprint();await select(original.atoms[1][0]);await f.getByLabel('对选区的批注').fill('添加 OH');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-status="failed"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
   console.log('PASS saturated carbon rejects invalid valence before application');
   await load('CC');original=await fingerprint();await bond(original.bonds[0][0]);await propose('改成三键');await apply();assert.equal((await fingerprint()).bonds[0][1].type,3);await undo();assert.deepEqual(await fingerprint(),original);
@@ -47,7 +60,7 @@ try {
   console.log('PASS triple bond and whole molecule deletion/undo');
   await f.getByRole('button',{name:'苯',exact:true}).click();await f.waitForFunction(()=>window.chemP0.ketcher.editor.struct().atoms.size===6);await saved();original=await fingerprint();await bond(original.bonds[0][0]);await f.getByLabel('对选区的批注').fill('改成双键');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-status="failed"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
   console.log('PASS aromatic Kekule bond refuses local bond-order modification');
-  await f.getByLabel('界面语言').selectOption('en');await f.locator('.chem-shortcuts > summary').click();await f.getByRole('button',{name:'Add OH',exact:true}).waitFor();await f.getByLabel('Annotation for the selection').waitFor();assert.deepEqual(errors,[]);await page.screenshot({path:'test-results/p3-browser.png'});
+  await f.getByLabel('界面语言').selectOption('en');await f.locator('.chem-shortcuts > summary').click();await f.getByRole('button',{name:'Add OH',exact:true}).waitFor();await f.getByRole('button',{name:'Add n-propyl',exact:true}).waitFor();await f.getByRole('button',{name:'Add isopropyl',exact:true}).waitFor();await f.getByLabel('Annotation for the selection').waitFor();assert.deepEqual(errors,[]);await page.screenshot({path:'test-results/p3-browser.png'});
   console.log('ALL-PASS: P3 browser acceptance');
 } catch(e){await page.screenshot({path:'test-results/p3-failure.png'});console.log('AGENT CALLS',await(await page.request.get('http://127.0.0.1:3099/test/agent-calls')).json());if(f)console.log('P3 DIAGNOSTIC',(await f.locator('body').innerText()).slice(-2800));throw e;}
 finally{await browser.close();}

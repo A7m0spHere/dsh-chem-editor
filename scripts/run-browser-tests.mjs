@@ -4,28 +4,34 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { build } from 'esbuild';
-import { apply } from '../lib/index.js';
+import { apply, requestedEdits } from '../lib/index.js';
 const base = resolve(tmpdir()); const directory = await mkdtemp(join(base, 'dsh-chem-browser-'));
 const routes = new Map(), disposers = [];
 const tools = new Map(), agentCalls = [], listeners = new Map();
-const prompt = async request => {
-  setTimeout(async () => {
-    const exec = { agent: { session: { id: request.sessionId } }, signal: new AbortController().signal };
+async function runAgent(sessionId,annotationId) {
+    const exec = { agent: { session: { id: sessionId } }, signal: new AbortController().signal };
     try {
-      listeners.get('session/event')?.({id:request.sessionId},{type:'user/message',data:{source:{rpcId:request.requestId}}});
-      agentCalls.push({ tool: 'chem_get_context', annotationId: request.requestId });
-      const context = await tools.get('chem_get_context').execute({ annotationId: request.requestId }, exec);
+      agentCalls.push({ tool: 'chem_get_context', annotationId });
+      const context = await tools.get('chem_get_context').execute({ annotationId }, exec);
       const data = JSON.parse(context.context);
       if (data.instruction.includes('仅解释')) return;
-      const element = data.instruction.includes('F') ? 'F' : 'N';
-      let args = { operation: 'replace_atom', targetAtom: data.selectedAtom?.id, element };
-      if (data.instruction.includes('添加')) args = { operation: 'attach_fragment', targetAtom: data.selectedAtom.id, fragment: data.instruction.match(/OH|CH3|NH2|Cl|F/)[0] };
-      if (data.instruction.includes('双键') || data.instruction.includes('三键')) args = { operation: 'change_bond', targetBond: data.selection.bonds[0], bondType: data.instruction.includes('三键') ? 3 : 2 };
-      if (data.instruction.includes('删除')) args = { operation: 'delete_selection' };
-      agentCalls.push({ tool: 'chem_propose_edit', annotationId: request.requestId, ...args });
-      await tools.get('chem_propose_edit').execute({ annotationId: request.requestId, ...args, reason: '根据冻结选区执行单原子元素替换。' }, exec);
-    } catch (e) { agentCalls.push({ error: e.message }); } finally { listeners.get('session/event')?.({id:request.sessionId},{type:'turn/end'}); }
-  }, 400);
+      let expected;
+      try {if(data.instruction.includes('苄基'))throw Object.assign(new Error('暂不支持苄基，请明确其他修改要求。'),{code:'unsupported_fragment'});expected=requestedEdits(data.instruction,data.clarification);} catch(e){await tools.get('chem_reject_edit').execute({annotationId,code:e.code||'clarification_required',reason:e.message},exec);return;}
+      if(expected.some(e=>e.operation==='attach_fragment')&&data.attachmentAtom===null){
+        await tools.get('chem_reject_edit').execute({annotationId,code:'connection_point_required',reason:'请在批注区选择一个连接原子后继续。'},exec);return;
+      }
+      const edits=expected.map(e=>({...e,...(['replace_atom','attach_fragment'].includes(e.operation)?{targetAtom:data.attachmentAtom}:{}),...(e.operation==='change_bond'?{targetBond:data.selection.bonds[0]}:{})}));
+      const args=edits.length===1||data.instruction.startsWith('测试不完整计划：')?edits[0]:{operation:'batch',edits};
+      agentCalls.push({ tool: 'chem_propose_edit', annotationId, ...args });
+      await tools.get('chem_propose_edit').execute({ annotationId, ...args, reason: '完整执行用户要求，使用冻结选区。' }, exec);
+    } catch (e) { agentCalls.push({ error: e.message }); } finally { listeners.get('session/event')?.({id:sessionId},{type:'turn/end'}); }
+}
+const prompt = async request => {
+  const annotationId=request.content?.[0]?.text?.match(/批注 ID：([a-zA-Z0-9-]+)/)?.[1]||request.requestId;
+  setTimeout(()=>{
+    listeners.get('session/event')?.({id:request.sessionId},{type:'user/message',data:{source:{kind:'user',rpcId:request.requestId}}});
+    runAgent(request.sessionId,annotationId);
+  },400);
   return { accepted: true };
 };
 apply({ on: (event,callback) => listeners.set(event,callback), tools: { register: spec => { tools.set(spec.name, spec); return () => tools.delete(spec.name); } }, sessionController: { list: async () => ({ items: ['session-a', 'session-b'].map(sessionId => ({ sessionId, cwd: join(directory, sessionId) })) }), prompt }, connection: { fetch: { register: route => routes.set(route.path, route) } }, effect: fn => { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); } });
@@ -37,6 +43,15 @@ const server = createServer(async (req, res) => {
     if (path === '/test/fail-next-save') { failNextSave = true; res.end('ok'); return; }
     if (path === '/test/fail-next-apply') { failNextApply = true; res.end('ok'); return; }
     if (path === '/test/agent-calls') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(agentCalls)); return; }
+    if(path==='/test/chat-reply'){
+      const buffers=[];for await(const b of req)buffers.push(b);const {sessionId,annotationId,userReply}=JSON.parse(Buffer.concat(buffers));
+      const exec={agent:{session:{id:sessionId}},signal:new AbortController().signal};
+      listeners.get('session/event')?.({id:sessionId},{type:'user/message',data:{source:{kind:'user',rpcId:'fixture-reply-'+Date.now()},content:[{type:'text',text:userReply}]}});
+      await tools.get('chem_get_context').execute({annotationId},exec);
+      agentCalls.push({tool:'chem_continue_edit',annotationId,userReply});
+      await tools.get('chem_continue_edit').execute({annotationId,userReply},exec);
+      await runAgent(sessionId,annotationId);res.end('ok');return;
+    }
     if (routes.has(path)) {
       const buffers = []; for await (const chunk of req) buffers.push(chunk);
       let response;
@@ -55,7 +70,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(3099, '127.0.0.1', r));
 try {
-  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/layout-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
+  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/edit-flow-browser-test.mjs', 'scripts/layout-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
     const code = await new Promise((resolve, reject) => { const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true }); child.once('error', reject); child.once('exit', resolve); });
     if (code !== 0) throw new Error(`${script} failed (${code})`);
   }

@@ -66,7 +66,15 @@ html, body, #root { height: 100%; margin: 0; }
 .chem-note-row { display: flex; align-items: center; gap: 8px; }
 .chem-note-row textarea { flex: 1; min-width: 0; resize: vertical; font: inherit; line-height: 1.5; border: 1px solid #dce1e9; border-radius: 7px; padding: 6px 8px; color: inherit; background: #fff; }
 .chem-annotation small { display: block; margin-top: 7px; color: #8590a2; font-size: 11px; line-height: 1.5; }
+.chem-attachment { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; }
+.chem-attachment select { min-width: 0; max-width: 100%; border: 1px solid #dce1e9; border-radius: 6px; padding: 5px; font: inherit; background: #fff; color: inherit; }
+.chem-attachment small { flex-basis: 100%; margin-top: 0; }
 .chem-note-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; line-height: 1.5; color: #65768c; overflow-wrap: anywhere; }
+.chem-note-status.chem-error { color: #ab3434; }
+.chem-clarification { margin-top: 8px; padding: 8px; border: 1px solid #dfe7f3; border-radius: 7px; background: #f8faff; }
+.chem-clarification label { font-size: 12px; font-weight: 600; }
+.chem-clarification small { margin: 4px 0 6px; }
+.chem-preview .chem-plan-complete { color: #397353; }
 .chem-preview { margin-top: 10px; border: 1px solid #dfe7f3; border-radius: 9px; padding: 10px; background: #f8faff; }
 .chem-preview > div:first-child { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .chem-preview > div:first-child > span { color: #7a879c; font-size: 11px; }

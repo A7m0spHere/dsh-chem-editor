@@ -1,15 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { apply } from '../lib/index.js';
+import { apply, fragments, fragmentInputs } from '../lib/index.js';
 test('host bridge serves only editor assets, isolates sessions, and disposes', async () => {
-  const routes = new Map(), disposers = [];
-  const ctx = { tools: { register: () => () => {} }, sessionController: { list: async () => ({ items: [{ sessionId: 'session-a', cwd: process.cwd() }, { sessionId: 'session-b', cwd: process.cwd() }] }) }, connection: { fetch: { register: route => { routes.set(route.path, route); } } }, effect: fn => { const d = fn(); if (typeof d === 'function') disposers.push(d); } };
+  const routes = new Map(), disposers = [], tools = new Map();
+  const ctx = { tools: { register: spec => { tools.set(spec.name,spec); return () => {}; } }, sessionController: { list: async () => ({ items: [{ sessionId: 'session-a', cwd: process.cwd() }, { sessionId: 'session-b', cwd: process.cwd() }] }) }, connection: { fetch: { register: route => { routes.set(route.path, route); } } }, effect: fn => { const d = fn(); if (typeof d === 'function') disposers.push(d); } };
   apply(ctx);
   const call = async (method, payload) => {
     const response = await routes.get(`/api/chem-editor/${method}`).fetch(new Request(`http://localhost/api/chem-editor/${method}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'test-request', method: `chem-editor/${method}`, payload }) }));
     return (await response.json()).result;
   };
   try {
+    assert.deepEqual(tools.get('chem_propose_edit').parameters.properties.fragment.enum,fragmentInputs);
+    for(const id of Object.keys(fragments))assert.ok(fragmentInputs.includes(id));
+    for(const alias of ['丙基','正丙基','异丙基','乙基'])assert.ok(fragmentInputs.includes(alias));
+    assert.ok(tools.has('chem_reject_edit'));
     const a = await call('bootstrap', { sessionId: 'session-a' });
     assert.equal(a.ok, true);
     assert.equal((await fetch(a.value.url)).status, 200);

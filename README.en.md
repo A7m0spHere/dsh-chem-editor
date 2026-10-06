@@ -18,10 +18,12 @@
 | --- | --- | --- |
 | Replace an element | One ordinary atom | Replace the selected C with N |
 | Change bond order | One ordinary bond | Change this single bond to a double bond |
-| Attach a group | One attachment atom | Add OH here using a single bond |
+| Attach a group | One atom, or a region with an explicit attachment atom | Add a propyl group here |
+| Replace a terminal fragment | Connected selection with one ordinary single-bond exit | Replace methyl with phenyl |
+| Compound edit | Frozen selection satisfying every step | Replace O with C, then attach phenyl |
 | Delete a region | Atoms, bonds or a rectangular selection | Delete the entire selection and retain the other atoms |
 
-Groups are fixed **OH, CH3, NH2, F and Cl** templates with one attachment point. Bond orders are 1, 2 or 3. Deletion previews list boundary bonds that will be cut.
+Addition and terminal replacement use fixed **OH, CH3, NH2, F, Cl, ethyl, n-propyl, isopropyl and phenyl** templates with one attachment point. Plain “propyl” means n-propyl, explicitly named in the preview; `C3H7` alone requires clarification. Multi-atom groups are added as one complete fragment and undone in one step. After box selection, choose an attachment atom in the annotation panel; it is frozen when submitting. Bond orders are 1, 2 or 3. Deletion previews list boundary bonds that will be cut.
 
 Also includes manual 2D drawing, SMILES / MOL / KET import, project / KET / MOL V3000 / SMILES / SVG export, automatic persistence and per-session documents. Simplified Chinese is the default; switch to English without reloading the canvas. Chemical identifiers and input data stay unchanged; some engine diagnostics retain their original language.
 
@@ -89,6 +91,12 @@ Ketcher runs in an isolated iframe. A temporary static server binds only to `127
 
 ## Current scope
 
+The executor, tool schema, Agent context, instructions and shortcuts share one fragment registry. Layout checks the entire added fragment while retaining original coordinates. Unsupported requests or missing attachment points use `chem_reject_edit` to show a concrete reason and next step in the panel. Executor failures also retain their specific cause.
+
+Explicit instructions are checked against the complete plan: methyl cannot substitute for propyl without actual user consent, and a compound request cannot silently be reduced to its first step. `batch.edits` submits 2–8 steps for one validated preview, atomic apply/save, and one-step undo. Unrecognized intent requires clarification. Reply in DSH chat or use “Clarify the edit” / “Continue annotation” in the panel; `chem_continue_edit` checks actual user replies and retains the frozen selection. Applied, cancelled or stale annotations cannot resume.
+
+Terminal replacement requires one non-stereo single-bond exit. Existing aromatic fragments, multiple exits and arbitrary reconnection remain unsupported. Compound steps can target only surviving original frozen IDs, not atoms created by an earlier step.
+
 AI edits target ordinary small molecules. Complex fragment replacement, multiple attachment exits, automatic reconnection, S/R-groups, query or pseudoatoms, reactions and polymer templates are not supported.
 
 Edits to aromatic ring bond orders, aromatic ring deletion and changes affecting adjacent stereocenters are rejected. Overlapping coordinates are rejected when they prevent reliable comparison. Untouched atoms, bonds, coordinates, charges, isotopes and stereo fields are checked; implicit hydrogen counts at declared boundaries may be recalculated.
@@ -97,6 +105,8 @@ Unchanged stereo diagnostics from the original structure stay visible in the pre
 
 **Validation:** P0–P3 browser regressions and the real official Web Agent workflow passed. P0–P2 also have native Desktop acceptance. P3 was installed and Desktop fully restarted, but its final native-window click check was blocked by Windows input protection and remains incomplete. See [P3 acceptance](./P3_ACCEPTANCE.md).
 
+The 2026-10-07 complete-edit fix passed 20 unit tests, six browser suites, and real official Web Agent validation of phenyl addition/replacement, compound plans and actual chat continuation. See [complete-edit acceptance](./EDIT_FLOW_ACCEPTANCE.md). The linked Desktop checkout has been rebuilt; Desktop was not restarted or tested natively for these additions in this run. Fully exit and reopen DSH to load the new tools and editor.
+
 ## Development and validation
 
 ```powershell
@@ -104,9 +114,9 @@ pnpm test
 pnpm run test:browser
 ```
 
-Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. Each P0/P1/P2/P3 and responsive-layout suite must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion and idempotent commits.
+Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. All six suites (P0/P1/P2/P3, complete edits/continuation, and responsive layout) must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion and idempotent commits.
 
-Real-model tests require a separately configured official DSH temporary Web profile and read its launch URL from an ignored local log. Ordinary tests do not call your model. Run `scripts/p*-real-agent-test.mjs` only after configuring that environment.
+Real-model tests require a separately configured official DSH temporary Web profile and read its launch URL from an ignored local log. Ordinary tests do not call your model. Run `scripts/*-real-agent-test.mjs` only after configuring that environment. `complete-edit-real-agent-test.mjs` covers phenyl addition/replacement, compound edits and actual chat replies.
 
 - [P0 integration](./P0_ACCEPTANCE.md) · [P1 persistence and Chinese UI](./P1_ACCEPTANCE.md) · [P2 Agent workflow](./P2_ACCEPTANCE.md) · [P3 local operations](./P3_ACCEPTANCE.md)
 - [Development plan](./DEVELOPMENT_PLAN.md): P4 scope will be decided separately.

@@ -1,6 +1,9 @@
 // Shared deterministic executor. The model chooses an operation, never a replacement graph.
-export const fragments = { OH: { label: 'O', hydrogen: 1 }, CH3: { label: 'C', hydrogen: 3 }, NH2: { label: 'N', hydrogen: 2 }, F: { label: 'F', hydrogen: 0 }, Cl: { label: 'Cl', hydrogen: 0 } };
-export const operations = ['replace_atom', 'change_bond', 'attach_fragment', 'delete_selection'];
+import { fragments, resolveFragment, fragmentList, fragmentName } from './fragments';
+import { fragmentPositions } from './fragment-layout';
+export { fragments } from './fragments';
+export const singleOperations = ['replace_atom', 'change_bond', 'attach_fragment', 'replace_fragment', 'delete_selection'];
+export const operations = [...singleOperations, 'batch'];
 const fail = (code: string, message: string): never => { throw Object.assign(new Error(message), { code }); };
 const position = (a: any) => JSON.stringify((a.location || []).map((n: number) => Math.round(n * 100000) / 100000));
 const same = (a: any, b: any): boolean => {
@@ -37,21 +40,42 @@ export function selectionAddresses(s: any) {
   }
   return addresses;
 }
-export function normalizePatch(s: any, args: any) {
+function normalizeSingle(s: any, args: any) {
   const op = args.operation || 'replace_atom', atoms = s.selection.atoms, bonds = s.selection.bonds;
-  if (!operations.includes(op)) fail('invalid_patch', '不支持此修改操作。');
+  if (!singleOperations.includes(op)) fail('invalid_patch', '不支持此修改操作。');
   const patch: any = { operation: op, reason: String(args.reason || '').slice(0, 800) };
   if (op === 'replace_atom' || op === 'attach_fragment') {
-    if (atoms.length !== 1 || bonds.length || args.targetAtom !== atoms[0]) fail('out_of_selection', '请明确选择一个连接或替换原子。');
-    patch.targetAtom = atoms[0];
+    if (op === 'replace_atom' && (atoms.length !== 1 || bonds.length || args.targetAtom !== atoms[0])) fail('out_of_selection', '改元素需要单独选择一个原子，请重新选择后提交。');
+    if (op === 'attach_fragment') {
+      const anchor = s.attachmentAtom ?? (atoms.length === 1 ? atoms[0] : undefined);
+      if (anchor === undefined) fail('connection_point_required', '添加基团需要明确连接点，请在批注区选择一个连接原子后重新提交。');
+      if (!atoms.includes(anchor) || args.targetAtom !== anchor) fail('out_of_selection', '连接点必须是批注提交时指定的选区内原子，请使用冻结的连接点。');
+    }
+    patch.targetAtom = args.targetAtom;
     if (op === 'replace_atom') {
       patch.fromElement = s.atoms.find((a: any) => a.id === atoms[0]).element;
       if (!['C','N','O','S','P','F','Cl','Br','I'].includes(args.element) || args.element === patch.fromElement) fail('out_of_selection', '请选择另一种支持的元素。');
       patch.element = args.element;
     } else {
-      if (!Object.hasOwn(fragments, args.fragment)) fail('invalid_patch', '基团只支持 OH、CH3、NH2、F、Cl。');
-      patch.fragment = args.fragment;
+      if (args.fragment === 'C3H7') fail('ambiguous_fragment', 'C3H7 无法区分正丙基与异丙基，请明确基团名称后重新提交。');
+      const fragment = resolveFragment(args.fragment);
+      if (!fragment) fail('unsupported_fragment', `暂不支持这个基团。当前支持 ${fragmentList()}，请修改要求后重新提交。`);
+      patch.fragment = fragment;
     }
+  } else if (op === 'replace_fragment') {
+    if (!atoms.length) fail('invalid_selection', '请选择要替换的末端原子或片段。');
+    const selected = new Set(atoms), boundary = s.bonds.filter((b: any) => selected.has(b.begin) !== selected.has(b.end));
+    if (boundary.length !== 1 || boundary[0].type !== 1 || boundary[0].stereo) fail('unsupported_boundary', '片段替换只支持一个普通单键出口，请选择末端原子或片段；多出口和立体连接需要另行处理。');
+    if (bonds.some((id: number) => { const b=s.bonds.find((b: any)=>b.id===id); return !b || !selected.has(b.begin) && !selected.has(b.end); })) fail('out_of_selection', '选中的键必须属于要替换的片段或其唯一边界。');
+    const reached = new Set([atoms[0]]);
+    for (let previous=0; previous!==reached.size;) { previous=reached.size; for (const b of s.bonds) if (selected.has(b.begin) && selected.has(b.end) && (reached.has(b.begin)||reached.has(b.end))) { reached.add(b.begin); reached.add(b.end); } }
+    if (reached.size !== atoms.length) fail('invalid_selection', '要替换的片段必须连通，请重新选择。');
+    if (args.fragment === 'C3H7') fail('ambiguous_fragment', '请明确替换为正丙基还是异丙基。');
+    const fragment = resolveFragment(args.fragment);
+    if (!fragment) fail('unsupported_fragment', `暂不支持这个替换片段。当前支持 ${fragmentList()}。`);
+    patch.fragment=fragment; patch.atoms=[...atoms]; patch.bonds=[...bonds];
+    patch.targetAtom=selected.has(boundary[0].begin)?boundary[0].end:boundary[0].begin;
+    patch.connectionBond=boundary[0].id;
   } else if (op === 'change_bond') {
     if (bonds.length !== 1 || args.targetBond !== bonds[0] || ![1,2,3].includes(args.bondType)) fail('out_of_selection', '请明确选择一根键及键级 1、2 或 3。');
     const b = s.bonds.find((b: any) => b.id === bonds[0]);
@@ -66,7 +90,42 @@ export function normalizePatch(s: any, args: any) {
   const result = executePatch(s, patch); patch.boundaryBonds = result.boundaryBonds;
   return patch;
 }
-export function executePatch(s: any, patch: any) {
+export function normalizePatch(s: any, args: any): any {
+  if (args.operation !== 'batch') return normalizeSingle(s,args);
+  if (!s.atomAddresses || !s.bondAddresses) fail('invalid_selection', '复合修改需要完整冻结映射，请重新选择并提交批注。');
+  if (!Array.isArray(args.edits) || args.edits.length < 2 || args.edits.length > 8) fail('invalid_patch', '复合修改必须包含 2 至 8 个操作，一次完整提交。');
+  let current=s; const edits:any[]=[], boundaries:number[]=[];
+  for (const edit of args.edits) {
+    const patch=normalizeSingle(current,edit), result=executeSingle(current,patch);
+    edits.push(patch); boundaries.push(...result.boundaryBonds); current=nextSnapshot(current,result.ket,patch);
+  }
+  return {operation:'batch',edits,reason:String(args.reason||'').slice(0,800),boundaryBonds:[...new Set(boundaries)]};
+}
+export function executePatch(s: any, patch: any): any {
+  if (patch.operation !== 'batch') return executeSingle(s,patch);
+  let current=s; const touched=new Set<string>(), boundaryBonds=new Set<number>();
+  for (const edit of patch.edits) {
+    const result=executeSingle(current,edit); result.hydrogenPositions.forEach((p:string)=>touched.add(p));result.boundaryBonds.forEach((id:number)=>boundaryBonds.add(id));
+    current=nextSnapshot(current,result.ket,edit);
+  }
+  return {ket:current.rawKet,hydrogenPositions:[...touched],boundaryBonds:[...boundaryBonds]};
+}
+// Internal mapping for a single frozen-version transaction. New atoms are never
+// implicitly selected; removed targets cannot be reused by a later step.
+function nextSnapshot(s: any, ket: string, patch: any) {
+  const before=JSON.parse(s.rawKet),after=JSON.parse(ket),removed=new Set(['delete_selection','replace_fragment'].includes(patch.operation)?patch.atoms:[]);
+  const oldAtoms=new Map(s.atoms.filter((a:any)=>!removed.has(a.id)).map((a:any)=>{const p=s.atomAddresses?.[a.id]||s.targetAddress;return [position(before[p.molecule].atoms[p.index]),a.id];}));
+  let atomId=Math.max(-1,...s.atoms.map((a:any)=>a.id))+1,bondId=Math.max(-1,...s.bonds.map((b:any)=>b.id))+1;
+  const atoms:any[]=[],bonds:any[]=[],atomAddresses:any={},bondAddresses:any={},seen=new Set<string>();
+  const oldBonds=new Map(s.bonds.filter((b:any)=>!removed.has(b.begin)&&!removed.has(b.end)).map((b:any)=>[`${b.begin}:${b.end}`,b.id]));
+  for(const [molecule,m] of Object.entries(after) as any[]) if(m?.type==='molecule') {
+    const ids=m.atoms.map((a:any,index:number)=>{const p=position(a);if(seen.has(p))fail('ambiguous_coordinates','存在重叠原子，无法执行复合修改，请先调整布局。');seen.add(p);const id=oldAtoms.get(p)??atomId++;atomAddresses[id]={molecule,index};atoms.push({id,element:a.label,charge:a.charge,isotope:a.isotope,implicitHydrogens:a.implicitHCount});return id;});
+    (m.bonds||[]).forEach((b:any,index:number)=>{const begin=ids[b.atoms[0]],end=ids[b.atoms[1]],id=oldBonds.get(`${begin}:${end}`)??bondId++;bondAddresses[id]={molecule,index};bonds.push({id,begin,end,type:b.type,stereo:b.stereo||0});});
+  }
+  const selection={atoms:s.selection.atoms.filter((id:number)=>Object.hasOwn(atomAddresses,id)),bonds:s.selection.bonds.filter((id:number)=>Object.hasOwn(bondAddresses,id))};
+  return {...s,rawKet:ket,ket,atoms,bonds,atomAddresses,bondAddresses,selection,attachmentAtom:selection.atoms.includes(s.attachmentAtom)?s.attachmentAtom:undefined,targetAddress:selection.atoms.length===1?atomAddresses[selection.atoms[0]]:undefined,aromaticBonds:bonds.filter(b=>b.type===4||(s.aromaticBonds||[]).includes(b.id)).map(b=>b.id)};
+}
+function executeSingle(s: any, patch: any) {
   const data = JSON.parse(s.rawKet), addresses = selectionAddresses(s), touched = new Set<string>(), boundaryBonds: number[] = [];
   for (const m of Object.values(data) as any[]) if (m?.type === 'molecule') m.bonds ??= [];
   const selectedAtoms = new Set(s.selection.atoms), selectedBonds = new Set(s.selection.bonds);
@@ -84,17 +143,17 @@ export function executePatch(s: any, patch: any) {
     const changedIds = new Set<number>();
     const aromatic = new Set(s.aromaticBonds || []);
     if (patch.operation === 'change_bond' && aromatic.has(patch.targetBond)) fail('protected_aromatic', '不能局部修改芳香环的键级，请手工处理芳香体系。');
-    if (patch.operation === 'delete_selection' && s.bonds.some((b: any) => aromatic.has(b.id) && (selectedAtoms.has(b.begin) || selectedAtoms.has(b.end) || selectedBonds.has(b.id)))) fail('protected_aromatic', '删除会断开芳香体系，请手工处理芳香环。');
+    if (['delete_selection','replace_fragment'].includes(patch.operation) && s.bonds.some((b: any) => (aromatic.has(b.id)||b.type===4) && (selectedAtoms.has(b.begin) || selectedAtoms.has(b.end) || selectedBonds.has(b.id)))) fail('protected_aromatic', '删除或替换会断开原有芳香体系，请手工处理芳香环。');
     if (patch.operation === 'attach_fragment') changedIds.add(patch.targetAtom);
     if (patch.operation === 'change_bond') { const b = s.bonds.find((b: any) => b.id === patch.targetBond); changedIds.add(b.begin); changedIds.add(b.end); }
-    if (patch.operation === 'delete_selection') for (const b of s.bonds) if (selectedAtoms.has(b.begin) || selectedAtoms.has(b.end) || selectedBonds.has(b.id)) {
+    if (['delete_selection','replace_fragment'].includes(patch.operation)) for (const b of s.bonds) if (selectedAtoms.has(b.begin) || selectedAtoms.has(b.end) || selectedBonds.has(b.id)) {
       if (!selectedAtoms.has(b.begin)) changedIds.add(b.begin);
       if (!selectedAtoms.has(b.end)) changedIds.add(b.end);
       if (selectedAtoms.has(b.begin) !== selectedAtoms.has(b.end)) boundaryBonds.push(b.id);
     }
     for (const id of changedIds) {
       const a = atomOf(id), adjacent = s.bonds.filter((b: any) => b.begin === id || b.end === id);
-      if (a.stereoLabel || a.stereoGroup || a.cip || adjacent.some((b: any) => b.stereo || (patch.operation !== 'attach_fragment' && b.type === 4))) fail('protected_stereo', '操作会改变芳香体系或邻接立体中心，请手工处理这处结构。');
+      if (a.stereoLabel || a.stereoGroup || a.cip || adjacent.some((b: any) => b.stereo || (!['attach_fragment','replace_fragment'].includes(patch.operation) && b.type === 4))) fail('protected_stereo', '操作会改变芳香体系或邻接立体中心，请手工处理这处结构。');
       touched.add(position(a)); delete a.implicitHCount;
     }
     if (patch.operation === 'change_bond') {
@@ -102,27 +161,29 @@ export function executePatch(s: any, patch: any) {
       if (![1,2,3].includes(b.type) || b.stereo) fail('protected_stereo', '只支持普通非立体单键、双键和三键。');
       b.type = patch.bondType;
     } else if (patch.operation === 'attach_fragment') {
-      const m = moleculeOf(patch.targetAtom), anchor = addressOf(patch.targetAtom).index, p = m.atoms[anchor].location;
+      const m = moleculeOf(patch.targetAtom), anchor = addressOf(patch.targetAtom).index;
       const template = fragments[patch.fragment as keyof typeof fragments];
-      if (!Array.isArray(p) || p.length !== 3) fail('invalid_patch', '连接点缺少二维坐标。');
-      const lengths = m.bonds.map((b: any) => Math.hypot(m.atoms[b.atoms[0]].location[0]-m.atoms[b.atoms[1]].location[0], m.atoms[b.atoms[0]].location[1]-m.atoms[b.atoms[1]].location[1])).filter((n: number) => n > 0.1);
-      lengths.sort((a: number,b: number) => a-b); const length = lengths[Math.floor(lengths.length/2)] || 1;
-      let point: number[] = [], best = -Infinity;
-      for (let i = 0; i < 24; i++) {
-        const t = Math.PI*2*i/24, v = [p[0]+length*Math.cos(t), p[1]+length*Math.sin(t), p[2]];
-        const gap = Math.min(...m.atoms.filter((_: any,j: number) => j !== anchor).map((a: any) => Math.hypot(a.location[0]-v[0],a.location[1]-v[1])), length*2);
-        if (gap > best) { best = gap; point = v; }
-      }
-      if (best < length*0.45) fail('crowded_attachment', '连接点周围没有合适的位置，请调整布局后重试。');
-      m.bonds.push({ type: 1, atoms: [anchor, m.atoms.length] });
-      m.atoms.push({ label: template.label, location: point, implicitHCount: template.hydrogen }); touched.add(position(m.atoms.at(-1)));
-    } else if (patch.operation === 'delete_selection') {
+      const points = fragmentPositions(data, addressOf(patch.targetAtom).molecule, anchor, patch.fragment), offset = m.atoms.length;
+      m.bonds.push({ type: template.bondType, atoms: [anchor, offset + template.attachment] });
+      for (const b of template.bonds) m.bonds.push({ type: b.type, atoms: b.atoms.map(i => offset + i) });
+      template.atoms.forEach((a, i) => { const added = { label: a.label, location: points[i], implicitHCount: a.hydrogen }; m.atoms.push(added); touched.add(position(added)); });
+    } else if (patch.operation === 'delete_selection' || patch.operation === 'replace_fragment') {
+      const connection = patch.operation === 'replace_fragment' ? structuredClone(data[s.bondAddresses[patch.connectionBond].molecule].bonds[s.bondAddresses[patch.connectionBond].index]) : null;
+      let replacementAnchor=-1;
       for (const [key,m] of Object.entries(data) as any[]) if (Array.isArray(m?.atoms)) {
         const removed = new Set<number>([...selectedAtoms].map((id: any) => addressOf(id)).filter(a => a.molecule === key).map(a => a.index));
         const removedBonds = new Set<number>([...selectedBonds].map((id: any) => s.bondAddresses[id]).filter((a: any) => a.molecule === key).map((a: any) => a.index));
         const map = new Map<number,number>(); const atoms = m.atoms.filter((_: any,i: number) => { if (removed.has(i)) return false; map.set(i,map.size); return true; });
+        if(patch.operation==='replace_fragment' && key===addressOf(patch.targetAtom).molecule) replacementAnchor=map.get(addressOf(patch.targetAtom).index)!;
         m.bonds = m.bonds.filter((b: any,i: number) => !removedBonds.has(i) && !b.atoms.some((n: number) => removed.has(n))).map((b: any) => ({...b, atoms: b.atoms.map((n: number) => map.get(n))})); m.atoms = atoms;
         if (!atoms.length) { delete data[key]; data.root.nodes = data.root.nodes.filter((n: any) => n.$ref !== key); }
+      }
+      if(patch.operation==='replace_fragment') {
+        const key=addressOf(patch.targetAtom).molecule,m=data[key],template=fragments[patch.fragment],points=fragmentPositions(data,key,replacementAnchor,patch.fragment),offset=m.atoms.length;
+        const originalAnchor=addressOf(patch.targetAtom).index;
+        connection.atoms=connection.atoms.map((i:number)=>i===originalAnchor?replacementAnchor:offset+template.attachment);
+        m.bonds.push(connection,...template.bonds.map(b=>({type:b.type,atoms:b.atoms.map(i=>offset+i)})));
+        template.atoms.forEach((a,i)=>{const added={label:a.label,location:points[i],implicitHCount:a.hydrogen};m.atoms.push(added);touched.add(position(added));});
       }
     }
   }
@@ -151,14 +212,16 @@ export function verifyMolecularPatch(s: any, patch: any, after: string) {
   if (!same(canonical(expected.ket, expected.hydrogenPositions), canonical(after, expected.hydrogenPositions))) fail('out_of_selection', '候选修改影响了许可范围之外的结构或二维坐标，已拒绝。');
 }
 export function patchSummary(p: any, language = 'zh-CN') {
+  if(p.operation==='batch')return `${language==='en'?'Complete edit':'完整修改'}：${p.edits.map((edit:any,i:number)=>`${i+1}. ${patchSummary(edit,language)}`).join('；')}`;
+  if(p.operation==='replace_fragment')return language==='en'?`Replace ${p.atoms.length} selected atoms with ${fragmentName(p.fragment,language)}; reconnect bond #${p.connectionBond}`:`将选区 ${p.atoms.length} 个原子替换为${fragmentName(p.fragment)}；重接边界键 #${p.connectionBond}`;
   if (language === 'en') {
     if (p.operation === 'replace_atom') return `${p.fromElement} → ${p.element}`;
     if (p.operation === 'change_bond') return `Bond #${p.targetBond}: ${p.fromBondType} → ${p.bondType}`;
-    if (p.operation === 'attach_fragment') return `Add ${p.fragment} to atom #${p.targetAtom} (single bond)`;
+    if (p.operation === 'attach_fragment') return `Add ${fragmentName(p.fragment, language)} to atom #${p.targetAtom} (single bond)`;
     return `Delete ${p.atoms.length} atoms and ${p.bonds.length} selected bonds; cut ${p.boundaryBonds.length} boundary bonds${p.boundaryBonds.length ? ': ' + p.boundaryBonds.map((id: number) => '#' + id).join(', ') : ''}`;
   }
   if (p.operation === 'replace_atom') return `${p.fromElement} → ${p.element}`;
   if (p.operation === 'change_bond') return `键 #${p.targetBond}：${p.fromBondType} → ${p.bondType}`;
-  if (p.operation === 'attach_fragment') return `原子 #${p.targetAtom} 添加 ${p.fragment}（单键连接）`;
+  if (p.operation === 'attach_fragment') return `原子 #${p.targetAtom} 添加 ${fragmentName(p.fragment, language)}（单键连接）`;
   return `删除 ${p.atoms.length} 个原子、${p.bonds.length} 根选中键；断开 ${p.boundaryBonds.length} 根边界键${p.boundaryBonds.length ? '：' + p.boundaryBonds.map((id: number) => '#' + id).join('、') : ''}`;
 }
