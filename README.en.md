@@ -8,9 +8,9 @@
 
 [简体中文](./README.md) · [Installation](#installation) · [First use](#first-use) · [Current scope](#current-scope) · [Validation](./P3_ACCEPTANCE.md)
 
-![Aspirin in the 2D editor with a before/after preview of OH attachment at a selected carbon](./assets/readme/editor-preview.png)
+![The molecular canvas as the main workspace with native DSH chat opened alongside](./assets/readme/workspace-preview.png)
 
-<sub>Browser acceptance fixture: real Ketcher / Indigo with a deterministic Agent fixture. Real DSH Agent validation is documented separately.</sub>
+<sub>Official DSH 0.2.0-rc.2 Web environment: real Ketcher / Indigo and native DSH chat. This layout check made no model calls. [Workspace acceptance record](./WORKSPACE_ACCEPTANCE.md).</sub>
 
 ## Features
 
@@ -52,13 +52,17 @@ Fully quit DSH through its application menu and relaunch to load the host and to
 
 ## First use
 
-1. Open a DSH conversation and click the hexagonal **分子** button beside its title.
+1. Open a DSH conversation and select **分子工作区** in the sidebar, or click the hexagonal **分子** button beside its title, to enter the main molecular workspace.
 2. Load **Benzene**, keep the rectangular selection tool, and click a ring vertex.
 3. Wait for **Saved**, enter “Replace the selected C with N”, and choose **Send to Agent**. The session needs a configured, working model.
 4. Inspect the before/after preview. **Apply edit** produces pyridine; **Cancel annotation** retains the original.
 5. **Undo** restores the original molecule. Manual drawing and Agent edits share one history.
 
 **Replace selected atom** performs a manual element replacement without calling a model. Shortcut buttons fill the instruction; submit it with **Send to Agent**. Select bonds or drag a rectangular region for the other operations.
+
+The canvas is the main workspace. **DSH 助手** opens the current session's native chat as an auxiliary panel; closing it retains its draft. Narrow windows use a drawer. Local editing controls start collapsed and appear when atoms or bonds are selected, or when an Agent preview arrives.
+
+Expand **Import / Open**, **Save and restore**, or **Quick annotations** when needed. Drag the divider or use the arrow keys to resize the tools panel. **Focus canvas** hides the tools; **Fullscreen editor** expands the editor. Toggling auxiliary panels retains the molecule, selection and undo history. **返回 DSH 聊天** leaves the workspace; unsaved changes trigger a save and keep the workspace open until you retry after saving. Reopening restores the saved molecule.
 
 ## Controlled local edits
 
@@ -71,6 +75,8 @@ Submission freezes the selection and document version. The Agent reads it throug
 Molecules, names and interface language save automatically. After **Saved**, reopening the panel, refreshing or restarting DSH restores the document. Sessions have separate documents. Export a `.chem.json` **Project document** to move a structure to another session.
 
 Failed writes retain the original file and show an unsaved state. Export unsaved work before reloading after a version conflict. Undo history lasts only for the current editor lifetime.
+
+Direct sidebar navigation also saves the latest draft before detaching. Reentry waits for pending writes. If the departure save fails, the current client retains and restores the draft while checking its original version token for conflicts.
 
 <details>
 <summary>Storage and runtime details</summary>
@@ -98,7 +104,7 @@ pnpm test
 pnpm run test:browser
 ```
 
-Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. Each P0/P1/P2/P3 suite must report `ALL-PASS`. Unit tests cover persistence, conflicts, selection boundaries, deletion and idempotent commits.
+Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. Each P0/P1/P2/P3 and responsive-layout suite must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion and idempotent commits.
 
 Real-model tests require a separately configured official DSH temporary Web profile and read its launch URL from an ignored local log. Ordinary tests do not call your model. Run `scripts/p*-real-agent-test.mjs` only after configuring that environment.
 

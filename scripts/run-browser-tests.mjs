@@ -55,7 +55,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(3099, '127.0.0.1', r));
 try {
-  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
+  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/layout-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
     const code = await new Promise((resolve, reject) => { const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true }); child.once('error', reject); child.once('exit', resolve); });
     if (code !== 0) throw new Error(`${script} failed (${code})`);
   }

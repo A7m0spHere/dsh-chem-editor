@@ -11,6 +11,7 @@ async function editor(p) {
   await p.locator('iframe').waitFor();
   const element = await p.locator('iframe').elementHandle(); const f = await element.contentFrame();
   await f.waitForFunction(() => window.chemP0?.ketcher.editor.struct().atoms.size > 0 && !document.querySelector('.chem-busy'));
+  if (await f.getByRole('button', { name: '显示操作区', exact: true }).isVisible()) await f.getByRole('button', { name: '显示操作区', exact: true }).click();
   return f;
 }
 async function saved(f) { await f.waitForFunction(() => /^(已保存|Saved)$/.test(document.querySelector('[data-save-status]')?.textContent || '')); }
@@ -66,7 +67,7 @@ try {
   assert.equal(await identity(f), aspirin);
   console.log('PASS Chinese tooltips/dialogs and live English switch without structure loss');
 
-  await f.locator('.chem-actions summary').click();
+  await f.locator('.chem-actions details:not(.chem-document-actions) > summary').click();
   const projectDownload = page.waitForEvent('download'); await f.getByRole('button', { name: '项目文档', exact: true }).click();
   const download = await projectDownload; await download.saveAs('test-results/p1-project.chem.json');
   const project = JSON.parse(await readFile('test-results/p1-project.chem.json', 'utf8'));
@@ -83,6 +84,7 @@ try {
   await f.getByLabel('文档名称').fill('尚未保存的名字');
   await f.getByRole('alert').filter({ hasText: '模拟保存失败' }).waitFor();
   assert.equal((await workspaceDocument('session-a')).document.title, beforeFailure.document.title);
+  await f.locator('.chem-document-actions > summary').click();
   await f.getByRole('button', { name: '立即保存', exact: true }).click(); await saved(f);
   assert.equal((await workspaceDocument('session-a')).document.title, '尚未保存的名字');
   console.log('PASS failed save retains disk and canvas, explicit retry succeeds');
@@ -96,6 +98,7 @@ try {
   await fo.getByRole('alert').filter({ hasText: '其他窗口或外部程序已修改文档' }).waitFor();
   assert.equal((await workspaceDocument('session-a')).document.title, '窗口 A 最新版本');
   other.on('dialog', dialog => dialog.accept());
+  await fo.locator('.chem-document-actions > summary').click();
   await fo.getByRole('button', { name: '重新载入已保存版本', exact: true }).click();
   await fo.waitForFunction(() => document.querySelector('.chem-document input')?.value === '窗口 A 最新版本'); await saved(fo);
   assert.deepEqual(errors, []);

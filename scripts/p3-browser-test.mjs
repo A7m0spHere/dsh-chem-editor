@@ -5,7 +5,7 @@ const page = await browser.newPage({viewport:{width:1060,height:1100}}), errors=
 page.on('pageerror',e=>errors.push(e.message)); let f;
 const fingerprint = () => f.evaluate(()=>window.chemP0.fingerprint());
 async function saved(){await f.waitForFunction(()=>document.querySelector('[data-save-status]')?.textContent==='已保存'&&!document.querySelector('.chem-busy'));}
-async function load(smiles){const rev=await f.evaluate(()=>window.chemP0.revision());await f.getByLabel('导入 SMILES',{exact:true}).fill(smiles);await f.getByRole('button',{name:'载入',exact:true}).click();await f.waitForFunction(rev=>window.chemP0.revision()>rev,rev);await saved();}
+async function load(smiles){const rev=await f.evaluate(()=>window.chemP0.revision());await f.locator('.chem-import-menu > summary').click();await f.getByLabel('导入 SMILES',{exact:true}).fill(smiles);await f.getByRole('button',{name:'载入',exact:true}).click();await f.waitForFunction(rev=>window.chemP0.revision()>rev,rev);await saved();}
 async function point(id){const p=await f.evaluate(id=>window.chemP0.atomPoint(id),id),r=await page.locator('iframe').boundingBox();return{x:p.x+r.x,y:p.y+r.y};}
 async function select(id){const p=await point(id);await page.mouse.click(p.x,p.y);}
 async function bond(id){const b=(await fingerprint()).bonds.find(([n])=>n===id)[1],a=await point(b.begin),c=await point(b.end);await page.mouse.click((a.x+c.x)/2,(a.y+c.y)/2);}
@@ -47,7 +47,7 @@ try {
   console.log('PASS triple bond and whole molecule deletion/undo');
   await f.getByRole('button',{name:'苯',exact:true}).click();await f.waitForFunction(()=>window.chemP0.ketcher.editor.struct().atoms.size===6);await saved();original=await fingerprint();await bond(original.bonds[0][0]);await f.getByLabel('对选区的批注').fill('改成双键');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-status="failed"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
   console.log('PASS aromatic Kekule bond refuses local bond-order modification');
-  await f.getByLabel('界面语言').selectOption('en');await f.getByRole('button',{name:'Add OH',exact:true}).waitFor();await f.getByLabel('Annotation for the selection').waitFor();assert.deepEqual(errors,[]);await page.screenshot({path:'test-results/p3-browser.png'});
+  await f.getByLabel('界面语言').selectOption('en');await f.locator('.chem-shortcuts > summary').click();await f.getByRole('button',{name:'Add OH',exact:true}).waitFor();await f.getByLabel('Annotation for the selection').waitFor();assert.deepEqual(errors,[]);await page.screenshot({path:'test-results/p3-browser.png'});
   console.log('ALL-PASS: P3 browser acceptance');
 } catch(e){await page.screenshot({path:'test-results/p3-failure.png'});console.log('AGENT CALLS',await(await page.request.get('http://127.0.0.1:3099/test/agent-calls')).json());if(f)console.log('P3 DIAGNOSTIC',(await f.locator('body').innerText()).slice(-2800));throw e;}
 finally{await browser.close();}
