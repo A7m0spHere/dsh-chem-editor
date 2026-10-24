@@ -7,3 +7,4 @@ dist/
 *.tgz
 scripts/live-check.patch.yml
 scripts/live-inspect.mjs
+.mimosa/

@@ -14,6 +14,23 @@ async function runAgent(sessionId,annotationId) {
       agentCalls.push({ tool: 'chem_get_context', annotationId });
       const context = await tools.get('chem_get_context').execute({ annotationId }, exec);
       const data = JSON.parse(context.context);
+      if(data.protocolVersion===2){
+        // Real tools/Indigo with a deterministic plan; repair exercises rewind.
+        const call=async(name,args)=>{agentCalls.push({tool:name,annotationId,...args});return JSON.parse((await tools.get(name).execute({annotationId,...args},exec)).context);};
+        let draft=await call('chem_begin_edit',{});
+        draft=await call('chem_edit_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,requestId:'attach-'+annotationId,edits:[{operation:'attach_fragment',targetAtom:'a:'+data.attachmentAtom,fragment:'n-propyl'}]});
+        const terminal=draft.atoms.find(a=>a.created&&a.neighbors.length===1).ref;
+        const repair=data.instruction.startsWith('测试草稿修正：');
+        draft=await call('chem_edit_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,requestId:'replace-'+annotationId,edits:[{operation:'replace_atom',targetAtom:terminal,element:repair?'F':'O'},{operation:'change_bond',targetBond:draft.bonds.find(b=>b.beginRef===terminal||b.endRef===terminal).ref,bondType:repair?3:1}].slice(0,repair?2:1)});
+        draft=await call('chem_validate_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision});
+        if(repair){
+          if(draft.validation.valid)throw new Error('Expected invalid F triple-bond draft');
+          draft=await call('chem_edit_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,requestId:'repair-'+annotationId,rewindToStep:1,edits:[{operation:'replace_atom',targetAtom:terminal,element:'O'}]});
+          draft=await call('chem_validate_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision});
+        }
+        if(!draft.validation.valid)throw new Error('Draft validation failed: '+draft.validation.message);
+        await call('chem_propose_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,reason:'完整添加丙基并将新末端原子改为 O。'});return;
+      }
       if (data.instruction.includes('仅解释')) return;
       let expected;
       try {if(data.instruction.includes('苄基'))throw Object.assign(new Error('暂不支持苄基，请明确其他修改要求。'),{code:'unsupported_fragment'});expected=requestedEdits(data.instruction,data.clarification);} catch(e){await tools.get('chem_reject_edit').execute({annotationId,code:e.code||'clarification_required',reason:e.message},exec);return;}
@@ -70,7 +87,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(3099, '127.0.0.1', r));
 try {
-  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/edit-flow-browser-test.mjs', 'scripts/layout-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
+  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/edit-flow-browser-test.mjs', 'scripts/layout-browser-test.mjs', 'scripts/draft-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
     const code = await new Promise((resolve, reject) => { const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true }); child.once('error', reject); child.once('exit', resolve); });
     if (code !== 0) throw new Error(`${script} failed (${code})`);
   }

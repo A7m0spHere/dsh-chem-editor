@@ -110,16 +110,20 @@ The 2026-10-07 complete-edit fix passed 20 unit tests, six browser suites, and r
 ## Development and validation
 
 ```powershell
+pnpm run check:types
+pnpm run build
 pnpm test
 pnpm run test:browser
 ```
 
-Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. All six suites (P0/P1/P2/P3, complete edits/continuation, and responsive layout) must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion and idempotent commits.
+Builds automatically check module boundaries; use `pnpm run check:architecture` to run that check separately. See [A0 architecture acceptance (Chinese)](./docs/A0_ACCEPTANCE.md) and [A1 edit-draft acceptance (Chinese)](./docs/A1_ACCEPTANCE.md). A1 adds an optional "draft mode" in the annotation panel; its real-agent and native Desktop acceptance remain open.
+
+Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. All seven suites (P0/P1/P2/P3, complete edits/continuation, responsive layout, and A1 edit drafts) must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion, idempotent commits, and draft revision/rollback.
 
 Real-model tests require a separately configured official DSH temporary Web profile and read its launch URL from an ignored local log. Ordinary tests do not call your model. Run `scripts/*-real-agent-test.mjs` only after configuring that environment. `complete-edit-real-agent-test.mjs` covers phenyl addition/replacement, compound edits and actual chat replies.
 
 - [P0 integration](./P0_ACCEPTANCE.md) · [P1 persistence and Chinese UI](./P1_ACCEPTANCE.md) · [P2 Agent workflow](./P2_ACCEPTANCE.md) · [P3 local operations](./P3_ACCEPTANCE.md)
-- [Development plan](./DEVELOPMENT_PLAN.md): P4 scope will be decided separately.
+- [Development plan](./DEVELOPMENT_PLAN.md) · [Agent integration architecture (Chinese)](./docs/AGENT_ARCHITECTURE.md): A0 module extraction and A1 edit drafts are implemented (A1 pending real-agent acceptance); dynamic fragments and general editing remain future phases. Multi-boundary replacement and multiple annotations remain separate scopes.
 - [Report an issue](https://github.com/A7m0spHere/dsh-chem-editor/issues) with the DSH version, steps and a shareable minimal structure. Exclude credentials and authenticated URLs.
 
 ## Licensing and acknowledgements

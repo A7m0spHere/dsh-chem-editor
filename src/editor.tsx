@@ -1,33 +1,20 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Editor } from 'ketcher-react';
-import { StandaloneStructServiceProvider } from 'ketcher-standalone';
-import { fromAtomsAttrs, fromNewCanvas, Coordinates, KetcherAsyncEvents, KetSerializer } from 'ketcher-core';
+import { createStructServiceProvider } from './adapters/indigo/provider';
+import { captureSnapshot as captureKetcherSnapshot, loadMolecule as loadKetcherMolecule, fingerprint, contentFingerprint, rawKetOf, prepareCandidate, stagePatch, stageElement, rollbackAction, checkElement, atomPoint } from './adapters/ketcher';
+import { elements } from './contracts/operations';
+import { editorChannel } from './contracts/bridge';
+import { EditorCommandBridge } from './client/editor-bridge';
 import 'ketcher-react/dist/index.css';
 import './editor.css';
-import { executePatch, verifyMolecularPatch, patchSummary } from './molecular-patch';
-import { fragments, fragmentName, fragmentList } from './fragments';
+import { patchSummary } from './chemistry/molecular-patch';
+import { fragments, fragmentName, fragmentList } from './chemistry/fragments';
 import { samples } from './samples';
 import { localizeEditor } from './localization';
 
-const provider = new StandaloneStructServiceProvider();
-const elementChoices = ['C', 'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I'];
-const propsOf = (obj: any) => Object.fromEntries(Object.entries(obj).filter(([k, v]) => !['implicitH', 'implicitHCount', 'neighbors', 'badConn', 'valence', 'hasImplicitH'].includes(k) && typeof v !== 'function'));
-function fingerprint(struct: any) {
-  const atoms: any[] = [], bonds: any[] = [];
-  struct.atoms.forEach((a: any, id: number) => atoms.push([id, propsOf(a)]));
-  struct.bonds.forEach((b: any, id: number) => bonds.push([id, { ...b }]));
-  return { atoms, bonds };
-}
-function contentFingerprint(struct: any) {
-  // Serialize document content, including text and drawing objects, rather than
-  // comparing transient renderer fields such as bond lengths and hitboxes.
-  const data = JSON.parse(new KetSerializer().serializeMicromolecules(struct));
-  const molecules = Object.values(data).filter((v: any) => Array.isArray(v?.atoms)) as any[];
-  const origin = molecules[0]?.atoms[0]?.location || [0, 0, 0];
-  for (const molecule of molecules) for (const atom of molecule.atoms) if (atom.location) atom.location = atom.location.map((n: number, i: number) => Math.round((n - (origin[i] || 0)) * 100000) / 100000);
-  return JSON.stringify(data);
-}
+const provider = createStructServiceProvider();
+const elementChoices = elements;
 function App() {
   const k = React.useRef<any>();
   const revision = React.useRef(0);
@@ -64,6 +51,7 @@ function App() {
   const attachmentRef = React.useRef<number | null>(null);
   const [attachmentAtom, setAttachmentAtom] = React.useState<number | null>(null);
   const [instruction, setInstruction] = React.useState('把选中的碳原子替换为氮原子');
+  const [draftMode, setDraftMode] = React.useState(false);
   const [clarification, setClarification] = React.useState('');
   const [annotations, setAnnotations] = React.useState<any[]>([]);
   const [annotationBusy, setAnnotationBusy] = React.useState(false);
@@ -116,99 +104,53 @@ function App() {
   const previewRef = React.useRef<any>(null);
   const previewing = React.useRef('');
   const receipt = React.useRef<string | undefined>();
-  const requests = React.useRef(new Map<string, any>());
+  const commands = React.useRef(new EditorCommandBridge(value => post(value)));
   const previewUrls = React.useRef<string[]>([]);
   function command(method: string, payload: any) {
     if (!managed.current) return Promise.reject(new Error('请在 DSH 分子面板使用批注。'));
-    const requestId = crypto.randomUUID();
-    return new Promise<any>((resolve, reject) => {
-      const timer = setTimeout(() => { requests.current.delete(requestId); reject(new Error('批注通信超时，请查看聊天和当前批注状态。')); }, 45000);
-      requests.current.set(requestId, { resolve, reject, timer }); post({ type: 'command', method, payload, requestId });
-    });
+    return commands.current.command(method, payload);
   }
   function clearPreview() { previewRef.current = null; setPreview(null); for (const url of previewUrls.current) URL.revokeObjectURL(url); previewUrls.current = []; }
-  async function captureSnapshot(withTarget = false) {
-    const base = revision.current, edit = generation.current, frozenSelection = structuredClone(selectedRef.current);
-    const frozenAttachment = attachmentRef.current;
-    const ket = await k.current.getKet();
-    if (base !== revision.current || edit !== generation.current) throw new Error('结构正在变化，请重新选择。');
-    const struct = k.current.editor.struct(), atoms: any[] = [], bonds: any[] = [];
-    struct.atoms.forEach((a: any, id: number) => atoms.push({ id, element: a.label, charge: a.charge, isotope: a.isotope, implicitHydrogens: a.implicitH }));
-    struct.bonds.forEach((b: any, id: number) => bonds.push({ id, begin: b.begin, end: b.end, type: b.type, stereo: b.stereo }));
-    const serializer = new KetSerializer(), rawKet = serializer.serializeMicromolecules(struct);
-    let targetAddress: any, atomAddresses: any, bondAddresses: any, aromaticBonds: number[] = [];
-    if (withTarget) {
-      const s = frozenSelection;
-      if (!(s.atoms.length || s.bonds.length) || struct.sgroups.size || struct.rgroups.size) throw new Error('请选择普通原子、键或框选局部片段。');
-      // AAM tagging is applied to a clone only, never to the user's molecule.
-      const clone = struct.clone(); clone.atoms.forEach((a: any,id: number) => { a.aam = id + 1; });
-      const tagged = JSON.parse(serializer.serializeMicromolecules(clone)), original = JSON.parse(rawKet);
-      atomAddresses = {}; bondAddresses = {};
-      for (const [molecule, data] of Object.entries(tagged) as any) if (Array.isArray(data?.atoms)) data.atoms.forEach((a: any,index: number) => { atomAddresses[a.mapping - 1] = { molecule, index }; });
-      for (const b of bonds) {
-        const begin = atomAddresses[b.begin], end = atomAddresses[b.end];
-        const index = original[begin.molecule]?.bonds?.findIndex((x: any) => x.atoms[0] === begin.index && x.atoms[1] === end.index);
-        if (begin.molecule !== end.molecule || index < 0) throw new Error('无法映射所选键，请重新选择。');
-        bondAddresses[b.id] = {molecule: begin.molecule,index};
-      }
-      if (s.atoms.length === 1) targetAddress = atomAddresses[s.atoms[0]];
-      // Indigo identifies aromatic bonds even when Ketcher renders Kekulé bonds.
-      // Map by preserved coordinates instead of assuming exported IDs are stable.
-      const aromatic = await k.current.indigo.aromatize(struct.clone());
-      aromatic.bonds.forEach((b: any) => {
-        if (b.type !== 4) return;
-        const a = aromatic.atoms.get(b.begin).pp, c = aromatic.atoms.get(b.end).pp;
-        const match = bonds.find((v: any) => {
-          const p = struct.atoms.get(v.begin).pp, q = struct.atoms.get(v.end).pp;
-          const near = (x: any,y: any) => Math.hypot(x.x-y.x,x.y-y.y) < 0.00001;
-          return near(a,p) && near(c,q) || near(a,q) && near(c,p);
-        });
-        if (!match) throw new Error('无法映射芳香键，请重新选择。'); aromaticBonds.push(match.id);
-      });
-      if (base !== revision.current || edit !== generation.current) throw new Error('结构正在变化，请重新选择。');
-    }
-    return { documentId: documentId.current, revision: base, ket, rawKet, atoms, bonds, selection: frozenSelection, instanceId: epoch.current, ...(frozenAttachment !== null ? { attachmentAtom: frozenAttachment } : {}), ...(atomAddresses ? { atomAddresses, bondAddresses, targetAddress, aromaticBonds } : {}) };
+  function captureSnapshot(withTarget = false) {
+    const base = revision.current, edit = generation.current;
+    return captureKetcherSnapshot(k.current, { documentId: documentId.current, revision: base, instanceId: epoch.current, selection: selectedRef.current, attachmentAtom: attachmentRef.current, isCurrent: () => base === revision.current && edit === generation.current }, withTarget);
   }
   async function submitAnnotation() {
     setAnnotationBusy(true); setError('');
     try {
       if (dirty.current || saveConflict) throw new Error('请等待保存完成后提交批注。');
       const snapshot = await captureSnapshot(true);
-      const result = await command('annotate', { submissionId: crypto.randomUUID(), instruction, snapshot });
+      const result = await command('annotate', { submissionId: crypto.randomUUID(), instruction, snapshot, protocolVersion: draftMode ? 2 : 1 });
       setAnnotations(previous => [...previous.filter(a => a.id !== result.id), result]); setNotice('批注已发送给当前会话的 Agent，请等待预览。');
     } catch (e: any) { setError(e.message); }
     finally { setAnnotationBusy(false); }
   }
   async function preparePreview(record: any) {
-    if (previewing.current === record.id || previewRef.current?.id === record.id) return;
-    previewing.current = record.id; setBusy(true);
+    const key = `${record.id}:${record.previewVersion || 0}`;
+    if (previewing.current === key || previewRef.current?.id === record.id && previewRef.current?.previewVersion === record.previewVersion) return;
+    previewing.current = key; setBusy(true);
     try {
       const a = await command('annotation-detail', { annotationId: record.id });
-      const current = k.current, raw = new KetSerializer().serializeMicromolecules(current.editor.struct());
+      const current = k.current, raw = rawKetOf(current);
       if (a.frozen.instanceId !== epoch.current || a.frozen.documentId !== documentId.current || a.frozen.revision !== revision.current || raw !== a.frozen.rawKet) throw new Error('结构已经变化，此批注不能应用。');
-      const serializer = new KetSerializer();
-      const candidate = a.patch.operation === 'replace_atom' ? current.editor.struct().clone() : serializer.deserializeToStruct(executePatch(a.frozen, a.patch).ket);
-      if (a.patch.operation === 'replace_atom') candidate.atoms.get(a.patch.targetAtom).label = a.patch.element;
-      const checks = await current.indigo.check(candidate, { types: ['valence', 'query', 'pseudoatoms', 'radicals', 'stereo'] });
-      const originalChecks = await current.indigo.check(current.editor.struct(), { types: ['stereo'] });
-      // A pre-existing diagnostic is retained visibly, rather than preventing an
-      // unrelated edit or silently changing the original stereo configuration.
-      const existingStereo = checks.stereo && checks.stereo === originalChecks.stereo ? checks.stereo : '';
-      if (existingStereo) delete checks.stereo;
-      if (Object.values(checks).some(v => typeof v === 'string' && v.trim())) throw new Error(`结构检查未通过：${JSON.stringify(checks)}`);
-      const candidateKet = serializer.serializeMicromolecules(candidate);
-      if (a.patch.operation !== 'replace_atom') verifyMolecularPatch(a.frozen, a.patch, candidateKet);
-      const before = await current.generateImage(a.frozen.rawKet, { outputFormat: 'svg' });
-      const after = await current.generateImage(candidateKet, { outputFormat: 'svg' });
-      if (revision.current !== a.frozen.revision || new KetSerializer().serializeMicromolecules(current.editor.struct()) !== a.frozen.rawKet) throw new Error('生成预览期间结构已经变化。');
+      const { candidateKet, existingStereo, before, after } = await prepareCandidate(current, a.frozen, a.patch);
+      if (revision.current !== a.frozen.revision || rawKetOf(current) !== a.frozen.rawKet) throw new Error('生成预览期间结构已经变化。');
+      if (a.protocolVersion === 2 && record.status === 'validating') {
+        const verified = await command('preview', { annotationId: a.id, valid: true, candidateKet, ...draftReceipt(a) });
+        setError('');
+        if (verified.status !== 'proposed') return;
+      }
       clearPreview();
       const urls = [URL.createObjectURL(before), URL.createObjectURL(after)]; previewUrls.current = urls;
       const prepared = { ...a, candidateKet, urls, existingStereo }; previewRef.current = prepared; setPreview(prepared);
-      if (record.status === 'validating') await command('preview', { annotationId: a.id, valid: true, candidateKet });
+      if (a.protocolVersion !== 2 && record.status === 'validating') await command('preview', { annotationId: a.id, valid: true, candidateKet });
     } catch (e: any) {
       setError(e.message);
-      if (record.status === 'validating') await command('preview', { annotationId: record.id, valid: false, message: e.message }).catch(() => {});
-    } finally { previewing.current = ''; setBusy(false); }
+      if (record.status === 'validating') await command('preview', { annotationId: record.id, valid: false, message: e.message, ...draftReceipt(record) }).catch(() => {});
+    } finally { if (previewing.current === key) { previewing.current = ''; setBusy(false); } }
+  }
+  function draftReceipt(record: any) {
+    return record.protocolVersion === 2 ? { previewVersion: record.previewVersion, validationId: record.draftValidation?.id, draftRevision: record.patch?.draftRevision } : {};
   }
   async function applyPreview() {
     const a = previewRef.current; if (!a) return;
@@ -216,24 +158,16 @@ function App() {
     let action: any;
     try {
       const current = k.current;
-      if (revision.current !== a.frozen.revision || new KetSerializer().serializeMicromolecules(current.editor.struct()) !== a.frozen.rawKet) throw new Error('此预览已过期，请重新提交批注。');
+      if (revision.current !== a.frozen.revision || rawKetOf(current) !== a.frozen.rawKet) throw new Error('此预览已过期，请重新提交批注。');
       restoring.current = true;
-      if (a.patch.operation === 'replace_atom') {
-        const before = fingerprint(current.editor.struct());
-        action = fromAtomsAttrs(current.editor.render.ctab, a.patch.targetAtom, { label: a.patch.element }, false);
-        const expected = structuredClone(before); expected.atoms.find(([id]: any) => id === a.patch.targetAtom)[1].label = a.patch.element;
-        if (JSON.stringify(fingerprint(current.editor.struct())) !== JSON.stringify(expected)) throw new Error('修改会影响其他结构属性，已拒绝。');
-      } else {
-        action = fromNewCanvas(current.editor.render.ctab, new KetSerializer().deserializeToStruct(a.candidateKet));
-        verifyMolecularPatch(a.frozen, a.patch, new KetSerializer().serializeMicromolecules(current.editor.struct()));
-      }
+      action = stagePatch(current, a.frozen, a.patch, a.candidateKet);
       const ket = await current.getKet();
-      const result = await command('apply', { annotationId: a.id, document: { schemaVersion: 1, documentId: documentId.current, revision: a.frozen.revision + 1, title: titleRef.current, language: languageRef.current, ket } });
+      const result = await command('apply', { annotationId: a.id, ...draftReceipt(a), document: { schemaVersion: 1, documentId: documentId.current, revision: a.frozen.revision + 1, title: titleRef.current, language: languageRef.current, ket } });
       current.editor.update(action); action = null;
       revision.current = result.document.revision; setVersion(revision.current); lastContent.current = contentFingerprint(current.editor.struct());
       receipt.current = a.id; dirty.current = false; setSaveStatus('已保存'); setSaveError(''); setSavePath(result.path); post({ type: 'clean' });
       current.editor.selection(a.patch.operation === 'replace_atom' ? { atoms: [a.patch.targetAtom] } : { atoms: [], bonds: [] }); setNotice('修改已应用并保存，可撤销。'); clearPreview();
-    } catch (e: any) { if (action) { action.perform(k.current.editor.render.ctab); k.current.editor.update(true); } setError(e.message); }
+    } catch (e: any) { if (action) rollbackAction(k.current, action); setError(e.message); }
     finally { restoring.current = false; setBusy(false); selectionChanged(); await publish(); }
   }
   async function cancelAnnotation(id: string) { try { await command('cancel', { annotationId: id }); clearPreview(); setNotice('批注已取消，原结构保持。'); } catch (e: any) { setError(e.message); } }
@@ -245,27 +179,15 @@ function App() {
       setClarification('');setNotice('已发送补充要求，仍使用原批注的连接位置。');
     } catch(e:any){setError(e.message);}finally{setAnnotationBusy(false);}
   }
-  function loadMolecule(text: string) {
-    // In 3.7.0 setMolecule resolves before runAsyncAction has filled the canvas.
-    // Wait for that editor instance's completion event instead of its early promise.
-    return new Promise<void>((resolve, reject) => {
-      const instance = k.current;
-      const cleanup = () => { clearTimeout(timeout); instance.eventBus.removeListener(KetcherAsyncEvents.SUCCESS, success); instance.eventBus.removeListener(KetcherAsyncEvents.FAILURE, failure); };
-      const success = () => { cleanup(); resolve(); };
-      const failure = () => { cleanup(); reject(new Error('结构载入失败，请检查分子格式。')); };
-      const timeout = setTimeout(() => { cleanup(); reject(new Error('载入超时，请重新打开编辑器后重试。')); }, 30000);
-      instance.eventBus.once(KetcherAsyncEvents.SUCCESS, success); instance.eventBus.once(KetcherAsyncEvents.FAILURE, failure);
-      instance.setMolecule(text).catch((e: Error) => { cleanup(); reject(e); });
-    });
-  }
-  function post(value: any) { if (managed.current) parent.postMessage({ channel: 'dsh-chem-editor', epoch: epoch.current, ...value }, '*'); }
+  function loadMolecule(text: string) { return loadKetcherMolecule(k.current, text); }
+  function post(value: any) { if (managed.current) parent.postMessage({ channel: editorChannel, epoch: epoch.current, ...value }, '*'); }
   function documentOf(ket: string) {
     return { schemaVersion: 1, documentId: documentId.current, revision: revision.current, ket, title: titleRef.current, language: languageRef.current, ...(receipt.current ? { lastAppliedAnnotationId: receipt.current } : {}) };
   }
   function markDirty() {
     generation.current += 1; dirty.current = true; setSaveStatus('有未保存的修改');
     // Keep a synchronous draft in the carrier, independently of the debounced export.
-    post({ type: 'dirty', generation: generation.current, document: documentOf(new KetSerializer().serializeMicromolecules(k.current.editor.struct())) });
+    post({ type: 'dirty', generation: generation.current, document: documentOf(rawKetOf(k.current)) });
   }
   function metadata(nextTitle = titleRef.current, nextLanguage = languageRef.current) {
     titleRef.current = nextTitle; setTitle(nextTitle); languageRef.current = nextLanguage; setLanguage(nextLanguage);
@@ -334,23 +256,10 @@ function App() {
     if (atom.label === element) { setNotice('所选原子已经是这个元素。'); return; }
     setBusy(true); setError('');
     try {
-      if (struct.sgroups.size || struct.rgroups.size) throw new Error('暂不支持 S-group / R-group 内的替换。');
-      const candidate = struct.clone(); candidate.atoms.get(id).label = element;
-      const checks = await current.indigo.check(candidate, { types: ['valence', 'query', 'pseudoatoms', 'radicals'] });
-      if (Object.values(checks).some(v => typeof v === 'string' && v.trim())) throw new Error(`结构检查未通过：${JSON.stringify(checks)}`);
+      await checkElement(current, id, element);
       if (revision.current !== base) throw new Error('检查期间结构已变化，请重新选择。');
-      const before = fingerprint(struct);
       const old = atom.label;
-      // Ketcher's builder performs the operations and returns their inverse.
-      const action = fromAtomsAttrs(current.editor.render.ctab, id, { label: element }, false);
-      const after = fingerprint(current.editor.struct());
-      const expected = structuredClone(before);
-      expected.atoms.find(([aid]: any) => aid === id)[1].label = element;
-      // Atom lists may be cleared by the official element action; these are excluded above by rejecting query structures.
-      if (JSON.stringify(after) !== JSON.stringify(expected)) {
-        action.perform(current.editor.render.ctab); current.editor.update(true);
-        throw new Error('修改会影响其他结构属性，已还原。请选择普通原子。');
-      }
+      const action = stageElement(current, id, element, '修改会影响其他结构属性，已还原。请选择普通原子。');
       current.editor.update(action);
       current.editor.selection({ atoms: [id] });
       selectionChanged();
@@ -373,7 +282,7 @@ function App() {
   React.useEffect(() => {
     localization.current = localizeEditor(document.body, languageRef.current);
     const onMessage = async (event: MessageEvent) => {
-      if (event.source !== parent || event.data?.channel !== 'dsh-chem-editor') return;
+      if (event.source !== parent || event.data?.channel !== editorChannel) return;
       const m = event.data;
       if (m.type === 'initialize' && k.current) {
         if (m.epoch === epoch.current) return;
@@ -399,14 +308,13 @@ function App() {
       }
       if (m.epoch !== epoch.current) return;
       if (m.type === 'command-result') {
-        const request = requests.current.get(m.requestId);
-        if (request) { clearTimeout(request.timer); requests.current.delete(m.requestId); m.error ? request.reject(Object.assign(new Error(m.error.message), { code: m.error.code })) : request.resolve(m.value); }
+        commands.current.receive(m);
       }
       if (m.type === 'annotations') {
         setAnnotations(m.records);
         const active = m.records.find((a: any) => ['validating', 'proposed'].includes(a.status) && a.instanceId === epoch.current && a.documentId === documentId.current);
         if (active && active.baseRevision === revision.current) preparePreview(active);
-        if (previewRef.current && !m.records.some((a: any) => a.id === previewRef.current.id && ['validating', 'proposed'].includes(a.status))) clearPreview();
+        if (previewRef.current && !m.records.some((a: any) => a.id === previewRef.current.id && a.previewVersion === previewRef.current.previewVersion && ['validating', 'proposed'].includes(a.status))) clearPreview();
       }
       if (m.type === 'saved' && m.sequence === sequence.current && m.generation === generation.current) {
         dirty.current = false; setSaveStatus('已保存'); setSaveError(''); setSavePath(m.path || ''); post({ type: 'clean' });
@@ -415,7 +323,7 @@ function App() {
       if (m.type === 'save-now') await publish(true);
     };
     window.addEventListener('message', onMessage);
-    return () => { clearTimeout(publishTimer.current); dispose.current?.(); localization.current?.dispose(); clearPreview(); for (const r of requests.current.values()) { clearTimeout(r.timer); r.reject(new Error('编辑器已关闭。')); } requests.current.clear(); window.removeEventListener('message', onMessage); };
+    return () => { clearTimeout(publishTimer.current); dispose.current?.(); localization.current?.dispose(); clearPreview(); commands.current.dispose(); window.removeEventListener('message', onMessage); };
   }, []);
   React.useEffect(() => { localization.current?.setLanguage(language); document.documentElement.lang = language; }, [language]);
   React.useEffect(() => { post({ type: 'working', busy }); }, [busy]);
@@ -424,7 +332,7 @@ function App() {
     (window as any).ketcher = instance;
     // Explicit diagnostic surface: exposes this editor only, never DSH credentials.
     (window as any).chemP0 = { ketcher: instance, fingerprint: () => fingerprint(instance.editor.struct()), revision: () => revision.current,
-      atomPoint: (id: number) => { const p = Coordinates.modelToView(instance.editor.struct().atoms.get(id).pp); const r = instance.editor.render.clientArea.getBoundingClientRect(); const v = instance.editor.render.viewBox; return { x: r.x + p.x - v.minX, y: r.y + p.y - v.minY }; } };
+      atomPoint: (id: number) => atomPoint(instance, id) };
     const change = () => changed();
     const selection = (v: any) => selectionChanged(v);
     const subscription = instance.editor.subscribe('change', change);
@@ -435,10 +343,10 @@ function App() {
   }, []);
   const buttons = React.useMemo(() => ({ miew: { hidden: true }, recognize: { hidden: true }, about: { hidden: true }, help: { hidden: true }, fullscreen: { hidden: true } }), []);
   const currentAnnotation = [...annotations].reverse().find(a => a.documentId === documentId.current);
-  const pendingAnnotation = annotations.some(a => ['submitting', 'queued', 'validating', 'proposed', 'needs_clarification'].includes(a.status));
+  const pendingAnnotation = annotations.some(a => ['submitting', 'queued', 'draft_ready', 'validating', 'proposed', 'needs_clarification'].includes(a.status));
   const resumable = currentAnnotation&&['failed','needs_clarification'].includes(currentAnnotation.status)&&currentAnnotation.instanceId===epoch.current&&currentAnnotation.baseRevision===revision.current;
   const attachmentSelection = resumable?currentAnnotation.selection:selected;
-  const processingAnnotation=annotations.some(a=>['submitting','queued','validating','proposed'].includes(a.status));
+  const processingAnnotation=annotations.some(a=>['submitting','queued','draft_ready','validating','proposed'].includes(a.status));
   const toolsLength = wide ? (toolsSize.width || 320) : (toolsSize.height || (innerHeight <= 650 ? 220 : 230));
   const workspaceLength = wide ? (workspace.current?.clientWidth || innerWidth) : (workspace.current?.clientHeight || innerHeight);
   return <main className={`chem-app${primaryMode ? ' chem-main-mode' : ''}${focused ? ' chem-focused' : ''}`}>
@@ -459,10 +367,11 @@ function App() {
       </div></details></div>
       {attachmentSelection.atoms.length > 1 ? <div className="chem-attachment"><label htmlFor="attachment-atom">添加基团的连接原子</label><select id="attachment-atom" value={attachmentAtom ?? ''} disabled={!ready || busy || annotationBusy || processingAnnotation} onChange={e => { const id = e.target.value === '' ? null : Number(e.target.value); attachmentRef.current = id; setAttachmentAtom(id); }}><option value="">请选择连接原子</option>{attachmentSelection.atoms.map((id:number) => <option key={id} value={id}>{attachmentSelection.labels?.find((a:any)=>a.id===id)?.element||''} #{id}</option>)}</select><small>添加基团前指定一个连接点；删除和改键不需要。</small></div> : null}
       <div className="chem-note-row"><textarea id="annotation" maxLength={1000} rows={2} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：添加正丙基、改成双键、删除选区" /><button disabled={!ready || busy || annotationBusy || pendingAnnotation || !(selected.atoms.length || selected.bonds.length) || dirty.current || !managed.current || !instruction.trim()} onClick={submitAnnotation}>交给 Agent</button></div>
+      <label><input type="checkbox" aria-label="草稿模式" checked={draftMode} disabled={pendingAnnotation || annotationBusy} onChange={e=>setDraftMode(e.target.checked)} />{language==='en'?'Draft mode (continue editing newly created fragments)':'草稿模式（连续编辑新建片段）'}</label>
       <small>{language === 'en' ? `Groups: ${fragmentList(language)}. Select one attachment atom; propyl means n-propyl. Preview before applying.` : `可添加 ${fragmentList()}。添加时指定一个连接原子；“丙基”默认正丙基。应用前会显示预览。`}</small>
-      {currentAnnotation ? <div className={`chem-note-status${['failed', 'stale'].includes(currentAnnotation.status) ? ' chem-error' : ''}`} role="status" aria-live="polite" data-annotation-id={currentAnnotation.id} data-annotation-status={currentAnnotation.status} data-annotation-error={currentAnnotation.errorCode}><span>{currentAnnotation.message}</span>{['submitting', 'queued', 'validating', 'proposed','needs_clarification'].includes(currentAnnotation.status) ? <button disabled={busy} onClick={() => cancelAnnotation(currentAnnotation.id)}>取消批注</button> : null}</div> : null}
+      {currentAnnotation ? <div className={`chem-note-status${['failed', 'stale'].includes(currentAnnotation.status) ? ' chem-error' : ''}`} role="status" aria-live="polite" data-annotation-id={currentAnnotation.id} data-annotation-status={currentAnnotation.status} data-annotation-error={currentAnnotation.errorCode}><span>{currentAnnotation.message}</span>{['submitting', 'queued', 'draft_ready', 'validating', 'proposed','needs_clarification'].includes(currentAnnotation.status) ? <button disabled={busy} onClick={() => cancelAnnotation(currentAnnotation.id)}>取消批注</button> : null}</div> : null}
       {resumable ? <div className="chem-clarification"><label htmlFor="clarification">补充修改要求</label><small>可在 DSH 聊天中补充，或在这里继续。仍使用原批注的冻结选区。</small><div className="chem-note-row"><textarea id="clarification" maxLength={1000} rows={2} value={clarification} onChange={e=>setClarification(e.target.value)} /><button disabled={busy||annotationBusy||dirty.current||saveConflict||!clarification.trim()} onClick={()=>continueAnnotation(currentAnnotation)}>继续批注</button></div></div> : null}
-      {preview && currentAnnotation?.status === 'proposed' ? <div className="chem-preview" data-preview-id={preview.id}><div><strong>{patchSummary(preview.patch, language)}</strong><span>冻结结构 v{preview.frozen.revision}</span></div><p>{preview.patch.reason}</p>{preview.patch.operation==='batch'?<p className="chem-plan-complete">{language==='en'?`All ${preview.patch.edits.length} steps will be applied and undone together.`:`全部 ${preview.patch.edits.length} 步一起应用，一步撤销。`}</p>:null}{preview.existingStereo ? <p>原结构已有立体提示（保持原状）：{preview.existingStereo}</p> : null}<div className="chem-preview-grid"><figure><img src={preview.urls[0]} alt="修改前结构" /><figcaption>修改前</figcaption></figure><figure><img src={preview.urls[1]} alt="修改后预览" /><figcaption>修改后预览</figcaption></figure></div><button className="chem-primary" disabled={busy || saveConflict} onClick={applyPreview}>应用修改</button><button disabled={busy} onClick={() => cancelAnnotation(preview.id)}>取消批注</button></div> : null}
+      {preview && currentAnnotation?.status === 'proposed' ? <div className="chem-preview" data-preview-id={preview.id} data-preview-version={preview.previewVersion}><div><strong>{patchSummary(preview.patch, language)}</strong><span>冻结结构 v{preview.frozen.revision}</span></div><p>{preview.patch.reason}</p>{['batch','draft'].includes(preview.patch.operation)?<p className="chem-plan-complete">{language==='en'?`All ${preview.patch.edits.length} steps will be applied and undone together.`:`全部 ${preview.patch.edits.length} 步一起应用，一步撤销。`}</p>:null}{preview.existingStereo ? <p>原结构已有立体提示（保持原状）：{preview.existingStereo}</p> : null}<div className="chem-preview-grid"><figure><img src={preview.urls[0]} alt="修改前结构" /><figcaption>修改前</figcaption></figure><figure><img src={preview.urls[1]} alt="修改后预览" /><figcaption>修改后预览</figcaption></figure></div><button className="chem-primary" disabled={busy || saveConflict} onClick={applyPreview}>应用修改</button><button disabled={busy} onClick={() => cancelAnnotation(preview.id)}>取消批注</button></div> : null}
     </section></div></div>
   </main>;
 }

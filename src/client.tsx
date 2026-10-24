@@ -1,6 +1,6 @@
 import React from 'react';
+import { editorChannel as ID } from './contracts/bridge';
 export const inject = ['slots', 'connection', 'layout', 'sidebarRight', 'sidebarRightTabs'];
-const ID = 'dsh-chem-editor';
 const h = React.createElement;
 type Draft = { document: any; generation: number; token: string | null };
 type WorkspaceCarry = { drafts: Map<string, Draft>; pending: Map<string, Promise<unknown>> };

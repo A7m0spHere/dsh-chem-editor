@@ -110,16 +110,20 @@ AI 局部编辑面向普通小分子。末端替换限一个普通非立体单�
 ## 开发与验证
 
 ```powershell
+pnpm run check:types
+pnpm run build
 pnpm test
 pnpm run test:browser
 ```
 
-浏览器验收需要已安装 Chrome。脚本自动启动隔离服务器并清理临时工作区；P0、P1、P2、P3、完整修改/续接和响应布局六组均以 `ALL-PASS` 为通过判据。布局检查覆盖窄面板、宽窗口、分隔条、专注绘图和 iframe 全屏。单元测试还覆盖完整意图、复合提交、单出口替换和真实用户补充的续接。
+构建自动运行依赖边界检查，也可单独运行 `pnpm run check:architecture`。A0 的模块整理与兼容验证见 [架构整理验收](./docs/A0_ACCEPTANCE.md)，A1 草稿会话（批注面板可选「草稿模式」）的单元与浏览器验收见 [A1 草稿验收](./docs/A1_ACCEPTANCE.md)；A1 的真实 Agent 与 Desktop 原生验收待完成。
+
+浏览器验收需要已安装 Chrome。脚本自动启动隔离服务器并清理临时工作区；P0、P1、P2、P3、完整修改/续接、响应布局和 A1 草稿七组均以 `ALL-PASS` 为通过判据。布局检查覆盖窄面板、宽窗口、分隔条、专注绘图和 iframe 全屏。单元测试还覆盖完整意图、复合提交、单出口替换、真实用户补充的续接和草稿修订/回滚。
 
 真实模型测试需要另行启动已配置模型的官方 DSH 临时 Web profile，并从本地忽略的日志读取启动 URL；普通测试不会调用你的模型。未配置真实运行环境时，不直接运行 `scripts/*-real-agent-test.mjs`。`fragment-real-agent-test.mjs` 验证正/异丙基和不支持基团反馈；`complete-edit-real-agent-test.mjs` 验证苯基添加、甲基替换、复合计划和真实聊天续接。
 
 - [P0 技术验证](./P0_ACCEPTANCE.md) · [P1 保存与中文界面](./P1_ACCEPTANCE.md) · [P2 Agent 闭环](./P2_ACCEPTANCE.md) · [P3 四类局部操作](./P3_ACCEPTANCE.md)
-- [开发方案与后续计划](./DEVELOPMENT_PLAN.md)：P4 将另行确定多出口片段替换、多条批注等范围。
+- [开发方案与后续计划](./DEVELOPMENT_PLAN.md) · [Agent 融合架构规划](./docs/AGENT_ARCHITECTURE.md)：A0 模块整理与 A1 草稿会话已实现（A1 待真实 Agent 验收）；动态片段和通用编辑仍为后续阶段，多出口替换、多条批注单独确定范围。
 - [报告问题](https://github.com/A7m0spHere/dsh-chem-editor/issues)：请提供 DSH 版本、操作步骤和可分享的最小结构样例；不要附带凭据或认证 URL。
 
 ## 许可与致谢

@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { mkdir, writeFile, copyFile } from 'node:fs/promises';
+import './check-architecture.mjs';
 await mkdir('lib', { recursive: true });
 await mkdir('dist', { recursive: true });
 await build({ entryPoints: ['src/editor.tsx'], bundle: true, format: 'esm', platform: 'browser', outfile: 'dist/editor.js', minify: true, sourcemap: false, banner: { js: 'globalThis.process ??= {env:{},versions:{},browser:true,nextTick:(fn,...args)=>queueMicrotask(()=>fn(...args))};' }, define: { 'process.env.NODE_ENV': '"production"', 'global': 'globalThis' }, loader: { '.woff': 'dataurl', '.woff2': 'dataurl', '.ttf': 'dataurl', '.svg': 'dataurl', '.png': 'dataurl' } });
