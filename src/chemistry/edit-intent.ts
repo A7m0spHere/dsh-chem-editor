@@ -1,4 +1,4 @@
-import { fragmentInputs, resolveFragment } from './fragments';
+import { fragmentInputs, resolveFragmentSpec, smilesLike } from './fragment-spec';
 
 type Request = { operation: string; fragment?: string; element?: string; bondType?: number };
 const fail = (code: string,message: string): never => { throw Object.assign(new Error(message),{code}); };
@@ -11,7 +11,10 @@ function namedFragment(text: string) {
     const rest=target.slice(name.length);
     return !rest||/^[\s（(,，。.;；!?！？]/.test(rest)||/^(基团|片段|使用|采用|通过|保留|连接|到|以)/.test(rest);
   });
-  return alias ? resolveFragment(alias) : undefined;
+  if(alias) return resolveFragmentSpec(alias)?.canonical;
+  const smiles=target.replace(/^(?:片段\s+)?SMILES[:\s]+/i,'').trim();
+  if(smilesLike(smiles)&&smiles!==target) return smiles;
+  return undefined;
 }
 function element(text: string) {
   const target=cleanTarget(text);

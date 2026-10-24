@@ -1,4 +1,4 @@
-import { fragments } from './fragments';
+import type { ParsedFragment } from '../contracts/fragment';
 
 const distance = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 function segmentDistance(p: number[], a: number[], b: number[]) {
@@ -11,8 +11,10 @@ function crosses(a: number[], b: number[], c: number[], d: number[]) {
   return cross(a,b,c) * cross(a,b,d) < -1e-10 && cross(c,d,a) * cross(c,d,b) < -1e-10;
 }
 // Rotate/reflect the entire fragment. Never move existing atoms to make room.
-export function fragmentPositions(data: any, molecule: string, anchor: number, fragment: string) {
-  const m = data[molecule], p = m.atoms[anchor].location, template = fragments[fragment];
+// The fragment is the unified parsed graph: fixed templates and dynamic SMILES
+// fragments arrive with the same relative layout contract.
+export function fragmentPositions(data: any, molecule: string, anchor: number, fragment: ParsedFragment) {
+  const m = data[molecule], p = m.atoms[anchor].location;
   if (!Array.isArray(p) || p.length !== 3 || !p.every(Number.isFinite)) throw Object.assign(new Error('连接点缺少有效二维坐标。'), { code: 'invalid_patch' });
   const lengths = m.bonds.map((b: any) => distance(m.atoms[b.atoms[0]].location, m.atoms[b.atoms[1]].location)).filter((n: number) => n > 0.1);
   lengths.sort((a: number,b: number) => a-b); const length = lengths[Math.floor(lengths.length/2)] || 1;
@@ -22,8 +24,8 @@ export function fragmentPositions(data: any, molecule: string, anchor: number, f
   let best = -Infinity, points: number[][] = [];
   for (const mirror of [1, -1]) for (let i = 0; i < 24; i++) {
     const t = Math.PI * 2 * i / 24, cos = Math.cos(t), sin = Math.sin(t);
-    const candidate = template.atoms.map(({point:[x,y]}) => [p[0] + length * (x*cos - mirror*y*sin), p[1] + length * (x*sin + mirror*y*cos), p[2]]);
-    const newBonds = [{ a: p, b: candidate[template.attachment], attachment: true }, ...template.bonds.map(b => ({ a: candidate[b.atoms[0]], b: candidate[b.atoms[1]], attachment: false }))];
+    const candidate = fragment.atoms.map(({point:[x,y]}) => [p[0] + length * (x*cos - mirror*y*sin), p[1] + length * (x*sin + mirror*y*cos), p[2]]);
+    const newBonds = [{ a: p, b: candidate[fragment.attachment], attachment: true }, ...fragment.bonds.map(b => ({ a: candidate[b.atoms[0]], b: candidate[b.atoms[1]], attachment: false }))];
     if (newBonds.some(b => oldBonds.some(c => crosses(b.a,b.b,c.a,c.b)))) continue;
     let gap = length * 2;
     for (const q of candidate) {

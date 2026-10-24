@@ -110,8 +110,8 @@ test('proposal and Agent rejection reasons persist in the panel after turn end w
   try {
     const saved=await store.save(dir,'session-a',document,null),signal=new AbortController().signal;
     const create=async instruction=>{const id=randomUUID();await service.create('session-a',{submissionId:id,instruction,snapshot,baseToken:saved.token},signal);await service.presented('session-a',id);return id;};
-    const id=await create('添加苄基');
-    await assert.rejects(service.propose('session-a',{annotationId:id,operation:'attach_fragment',targetAtom:37,fragment:'benzyl'},signal),e=>e.code==='unsupported_fragment');
+    const id=await create('添加硝基');
+    await assert.rejects(service.propose('session-a',{annotationId:id,operation:'attach_fragment',targetAtom:37,fragment:'硝基'},signal),e=>e.code==='unsupported_fragment');
     await service.turnEnded('session-a');
     let record=(await service.list('session-a')).find(a=>a.id===id);
     assert.equal(record.status,'failed');assert.equal(record.errorCode,'unsupported_fragment');assert.match(record.message,/当前支持.*正丙基/);

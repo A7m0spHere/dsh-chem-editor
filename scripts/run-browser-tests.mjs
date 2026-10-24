@@ -18,6 +18,14 @@ async function runAgent(sessionId,annotationId) {
         // Real tools/Indigo with a deterministic plan; repair exercises rewind.
         const call=async(name,args)=>{agentCalls.push({tool:name,annotationId,...args});return JSON.parse((await tools.get(name).execute({annotationId,...args},exec)).context);};
         let draft=await call('chem_begin_edit',{});
+        const dynamicGroup=Object.entries({'乙酰基':'acetyl','氰基':'cyano','苄基':'benzyl'}).find(([name])=>data.instruction.includes(name));
+        if(dynamicGroup){
+          draft=await call('chem_edit_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,requestId:'dynamic-'+annotationId,edits:[{operation:'attach_fragment',targetAtom:'a:'+data.attachmentAtom,fragment:dynamicGroup[1]}]});
+          draft=await call('chem_validate_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision});
+          if(!draft.validation.valid)throw new Error('Dynamic draft validation failed: '+draft.validation.message);
+          await call('chem_propose_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,reason:'完整添加'+dynamicGroup[0]+'。'});
+          return;
+        }
         draft=await call('chem_edit_draft',{editSessionId:draft.editSessionId,expectedDraftRevision:draft.draftRevision,requestId:'attach-'+annotationId,edits:[{operation:'attach_fragment',targetAtom:'a:'+data.attachmentAtom,fragment:'n-propyl'}]});
         const terminal=draft.atoms.find(a=>a.created&&a.neighbors.length===1).ref;
         const repair=data.instruction.startsWith('测试草稿修正：');
@@ -33,7 +41,7 @@ async function runAgent(sessionId,annotationId) {
       }
       if (data.instruction.includes('仅解释')) return;
       let expected;
-      try {if(data.instruction.includes('苄基'))throw Object.assign(new Error('暂不支持苄基，请明确其他修改要求。'),{code:'unsupported_fragment'});expected=requestedEdits(data.instruction,data.clarification);} catch(e){await tools.get('chem_reject_edit').execute({annotationId,code:e.code||'clarification_required',reason:e.message},exec);return;}
+      try {if(data.instruction.includes('硝基'))throw Object.assign(new Error('暂不支持硝基，请明确其他修改要求。'),{code:'unsupported_fragment'});expected=requestedEdits(data.instruction,data.clarification);} catch(e){await tools.get('chem_reject_edit').execute({annotationId,code:e.code||'clarification_required',reason:e.message},exec);return;}
       if(expected.some(e=>e.operation==='attach_fragment')&&data.attachmentAtom===null){
         await tools.get('chem_reject_edit').execute({annotationId,code:'connection_point_required',reason:'请在批注区选择一个连接原子后继续。'},exec);return;
       }
@@ -87,7 +95,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(3099, '127.0.0.1', r));
 try {
-  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/edit-flow-browser-test.mjs', 'scripts/layout-browser-test.mjs', 'scripts/draft-browser-test.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
+  for (const script of ['scripts/browser-test.mjs', 'scripts/p1-browser-test.mjs', 'scripts/p2-browser-test.mjs', 'scripts/p3-browser-test.mjs', 'scripts/edit-flow-browser-test.mjs', 'scripts/layout-browser-test.mjs', 'scripts/draft-browser-test.mjs', 'scripts/dynamic-fragment-browser-test.mjs', 'scripts/fragment-probe.mjs'].filter(s => !process.env.CHEM_TEST_STAGE || process.env.CHEM_TEST_STAGE.split(',').some(stage=>s.includes(stage)))) {
     const code = await new Promise((resolve, reject) => { const child = spawn(process.execPath, [script], { stdio: 'inherit', windowsHide: true }); child.once('error', reject); child.once('exit', resolve); });
     if (code !== 0) throw new Error(`${script} failed (${code})`);
   }

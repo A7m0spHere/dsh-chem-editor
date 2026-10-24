@@ -1,10 +1,26 @@
 // Shared deterministic executor. The model chooses an operation, never a replacement graph.
-import { fragments, resolveFragment, fragmentList, fragmentName } from './fragments';
+import { fragmentList, fragmentName, parseFragmentSpec, resolveFragmentSpec } from './fragment-spec';
 import { fragmentPositions } from './fragment-layout';
 export { fragments } from './fragments';
 import { singleOperations, operations, elements, bondTypes, batchLimits } from '../contracts/operations';
 export { singleOperations, operations } from '../contracts/operations';
 const fail = (code: string, message: string): never => { throw Object.assign(new Error(message), { code }); };
+// Fixed templates and dynamic SMILES fragments resolve through one spec so the
+// executor, layout and verification share a single graph representation.
+function resolvePatchFragment(args: any) {
+  if (args.fragment === 'C3H7') fail('ambiguous_fragment', 'C3H7 无法区分正丙基与异丙基，请明确基团名称后重新提交。');
+  const resolved = resolveFragmentSpec(args.fragment);
+  if (!resolved) fail('unsupported_fragment', `暂不支持这个基团。当前支持 ${fragmentList()}，或提交带 [*] 连接点的片段 SMILES 并声明 connection。`);
+  let connection: { atom: number; bondType: 1 | 2 | 3 } | undefined;
+  if (args.fragmentConnection !== undefined) {
+    const { atom, bondType } = args.fragmentConnection || {};
+    if (!Number.isSafeInteger(atom) || atom < 0 || !bondTypes.includes(bondType)) fail('invalid_fragment', 'connection 需要片段内原子序号（0 起）与键级 1/2/3。');
+    connection = { atom, bondType };
+  }
+  if (resolved.spec.kind === 'template' && connection) fail('invalid_fragment', '固定基团的连接点由模板定义，请勿另外声明 connection。');
+  const fragmentParsed = parseFragmentSpec(resolved.spec.kind === 'smiles' && connection ? { ...resolved.spec, connection } : resolved.spec);
+  return { fragment: resolved.canonical, fragmentParsed };
+}
 const position = (a: any) => JSON.stringify((a.location || []).map((n: number) => Math.round(n * 100000) / 100000));
 const same = (a: any, b: any): boolean => {
   if (typeof a === 'number') return typeof b === 'number' && Math.abs(a - b) < 0.00001;
@@ -57,10 +73,7 @@ function normalizeSingle(s: any, args: any) {
       if (!elements.includes(args.element) || args.element === patch.fromElement) fail('out_of_selection', '请选择另一种支持的元素。');
       patch.element = args.element;
     } else {
-      if (args.fragment === 'C3H7') fail('ambiguous_fragment', 'C3H7 无法区分正丙基与异丙基，请明确基团名称后重新提交。');
-      const fragment = resolveFragment(args.fragment);
-      if (!fragment) fail('unsupported_fragment', `暂不支持这个基团。当前支持 ${fragmentList()}，请修改要求后重新提交。`);
-      patch.fragment = fragment;
+      Object.assign(patch, resolvePatchFragment(args));
     }
   } else if (op === 'replace_fragment') {
     if (!atoms.length) fail('invalid_selection', '请选择要替换的末端原子或片段。');
@@ -71,9 +84,8 @@ function normalizeSingle(s: any, args: any) {
     for (let previous=0; previous!==reached.size;) { previous=reached.size; for (const b of s.bonds) if (selected.has(b.begin) && selected.has(b.end) && (reached.has(b.begin)||reached.has(b.end))) { reached.add(b.begin); reached.add(b.end); } }
     if (reached.size !== atoms.length) fail('invalid_selection', '要替换的片段必须连通，请重新选择。');
     if (args.fragment === 'C3H7') fail('ambiguous_fragment', '请明确替换为正丙基还是异丙基。');
-    const fragment = resolveFragment(args.fragment);
-    if (!fragment) fail('unsupported_fragment', `暂不支持这个替换片段。当前支持 ${fragmentList()}。`);
-    patch.fragment=fragment; patch.atoms=[...atoms]; patch.bonds=[...bonds];
+    Object.assign(patch, resolvePatchFragment(args));
+    patch.atoms=[...atoms]; patch.bonds=[...bonds];
     patch.targetAtom=selected.has(boundary[0].begin)?boundary[0].end:boundary[0].begin;
     patch.connectionBond=boundary[0].id;
   } else if (op === 'change_bond') {
@@ -169,11 +181,11 @@ function executeSingle(s: any, patch: any) {
       b.type = patch.bondType;
     } else if (patch.operation === 'attach_fragment') {
       const m = moleculeOf(patch.targetAtom), anchor = addressOf(patch.targetAtom).index;
-      const template = fragments[patch.fragment as keyof typeof fragments];
-      const points = fragmentPositions(data, addressOf(patch.targetAtom).molecule, anchor, patch.fragment), offset = m.atoms.length;
-      m.bonds.push({ type: template.bondType, atoms: [anchor, offset + template.attachment] });
+      const template = patch.fragmentParsed;
+      const points = fragmentPositions(data, addressOf(patch.targetAtom).molecule, anchor, template), offset = m.atoms.length;
+      m.bonds.push({ type: template.attachmentBondType, atoms: [anchor, offset + template.attachment] });
       for (const b of template.bonds) m.bonds.push({ type: b.type, atoms: b.atoms.map(i => offset + i) });
-      template.atoms.forEach((a, i) => { const added = { label: a.label, location: points[i], implicitHCount: a.hydrogen }; m.atoms.push(added); touched.add(position(added)); });
+      template.atoms.forEach((a, i) => { const added: any = { label: a.label, location: points[i], implicitHCount: a.hydrogen }; if (a.charge) added.charge = a.charge; if (a.isotope) added.isotope = a.isotope; m.atoms.push(added); touched.add(position(added)); });
     } else if (patch.operation === 'delete_selection' || patch.operation === 'replace_fragment') {
       const connection = patch.operation === 'replace_fragment' ? structuredClone(data[s.bondAddresses[patch.connectionBond].molecule].bonds[s.bondAddresses[patch.connectionBond].index]) : null;
       let replacementAnchor=-1;
@@ -186,11 +198,11 @@ function executeSingle(s: any, patch: any) {
         if (!atoms.length) { delete data[key]; data.root.nodes = data.root.nodes.filter((n: any) => n.$ref !== key); }
       }
       if(patch.operation==='replace_fragment') {
-        const key=addressOf(patch.targetAtom).molecule,m=data[key],template=fragments[patch.fragment],points=fragmentPositions(data,key,replacementAnchor,patch.fragment),offset=m.atoms.length;
+        const key=addressOf(patch.targetAtom).molecule,m=data[key],template=patch.fragmentParsed,points=fragmentPositions(data,key,replacementAnchor,template),offset=m.atoms.length;
         const originalAnchor=addressOf(patch.targetAtom).index;
         connection.atoms=connection.atoms.map((i:number)=>i===originalAnchor?replacementAnchor:offset+template.attachment);
         m.bonds.push(connection,...template.bonds.map(b=>({type:b.type,atoms:b.atoms.map(i=>offset+i)})));
-        template.atoms.forEach((a,i)=>{const added={label:a.label,location:points[i],implicitHCount:a.hydrogen};m.atoms.push(added);touched.add(position(added));});
+        template.atoms.forEach((a,i)=>{const added:any={label:a.label,location:points[i],implicitHCount:a.hydrogen};if(a.charge)added.charge=a.charge;if(a.isotope)added.isotope=a.isotope;m.atoms.push(added);touched.add(position(added));});
       }
     }
   }

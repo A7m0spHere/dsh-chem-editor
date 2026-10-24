@@ -10,9 +10,13 @@ test('host bridge serves only editor assets, isolates sessions, and disposes', a
     return (await response.json()).result;
   };
   try {
-    assert.deepEqual(tools.get('chem_propose_edit').parameters.properties.fragment.enum,fragmentInputs);
+    const fragmentProperty = tools.get('chem_propose_edit').parameters.properties.fragment;
+    assert.equal(fragmentProperty.type, 'string', 'A2: fragment accepts named ids and strict SMILES');
+    assert.ok(!fragmentProperty.enum, 'no enum: dynamic fragment SMILES are valid input');
+    assert.ok(fragmentProperty.description.includes('[*]'));
+    assert.deepEqual(tools.get('chem_propose_edit').parameters.properties.fragmentConnection, { type: 'object', properties: { atom: { type: 'integer', minimum: 0 }, bondType: { type: 'integer', enum: [1, 2, 3] } }, required: ['atom', 'bondType'], additionalProperties: false });
     for(const id of Object.keys(fragments))assert.ok(fragmentInputs.includes(id));
-    for(const alias of ['丙基','正丙基','异丙基','乙基'])assert.ok(fragmentInputs.includes(alias));
+    for(const alias of ['丙基','正丙基','异丙基','乙基','氰基','乙酰基','苄基'])assert.ok(fragmentInputs.includes(alias));
     assert.ok(tools.has('chem_reject_edit'));
     const a = await call('bootstrap', { sessionId: 'session-a' });
     assert.equal(a.ok, true);

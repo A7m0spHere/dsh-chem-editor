@@ -14,7 +14,8 @@ test('whitelist fragments have one explicit single-bond attachment; survivors re
     verifyMolecularPatch(s,p,result.ket);
     data.mol0.atoms[2].charge=0; assert.throws(()=>verifyMolecularPatch(s,p,JSON.stringify(data)),e=>e.code==='out_of_selection');
   }
-  assert.throws(()=>normalizePatch(s,{operation:'attach_fragment',targetAtom:10,fragment:'C=O'}),e=>e.code==='unsupported_fragment');
+  assert.throws(()=>normalizePatch(s,{operation:'attach_fragment',targetAtom:10,fragment:'C=O'}),e=>e.code==='connection_point_required');
+  assert.throws(()=>normalizePatch(s,{operation:'attach_fragment',targetAtom:10,fragment:'随便什么基团'}),e=>e.code==='unsupported_fragment');
   assert.throws(()=>normalizePatch(s,{operation:'attach_fragment',targetAtom:13,fragment:'OH'}),e=>e.code==='out_of_selection');
 });
 test('ethyl and both propyl isomers add the correct complete graph without changing survivors',()=>{

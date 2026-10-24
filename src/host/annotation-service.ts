@@ -2,8 +2,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFile, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { DocumentError, DocumentStore } from './document-store';
-import { selectionAddresses, normalizePatch, verifyMolecularPatch, patchSummary, operations, fragments } from '../chemistry/molecular-patch';
-import { fragmentCatalog } from '../chemistry/fragments';
+import { selectionAddresses, normalizePatch, verifyMolecularPatch, patchSummary, operations } from '../chemistry/molecular-patch';
+import { fragmentCatalog, fragmentIds } from '../chemistry/fragment-spec';
 import { verifyEditIntent } from '../chemistry/edit-intent';
 
 import { elements, rejectionCodes, bondTypes } from '../contracts/operations';
@@ -146,7 +146,7 @@ export class AnnotationService {
       for (const b of a.frozen.bonds) if (selectedBonds.has(b.id)) { selected.add(b.begin); selected.add(b.end); }
       const bonds = a.frozen.bonds.filter((b: any) => selected.has(b.begin) || selected.has(b.end));
       const neighborhood = new Set([...selected, ...bonds.flatMap((b: any) => [b.begin, b.end])]);
-      return { annotationId: id, status: a.status, context: JSON.stringify({ protocolVersion: a.protocolVersion ?? 1, draft: this.drafts.has(id) ? this.drafts.view(id,a.frozen) : null, previewVersion:a.previewVersion??null, documentId: a.frozen.documentId, baseRevision: a.frozen.revision, instruction: a.instruction, clarification: a.clarification ?? null, latestUserReply: this.replies.get(sessionId)?.text ?? null, canContinue: ['failed','needs_clarification'].includes(a.status), continuationRule: '补充后先调用 chem_continue_edit，userReply 必须照抄 latestUserReply；已应用/取消/过期批注不能继续。', selectedAtom: a.frozen.target, attachmentAtom: a.frozen.target?.id ?? null, attachmentCandidates: a.frozen.selection.atoms, selection: a.frozen.selection, boundaryBonds: bonds.filter((b: any) => selected.has(b.begin) !== selected.has(b.end)), atoms: full ? a.frozen.atoms : a.frozen.atoms.filter((x: any) => neighborhood.has(x.id)), bonds: full ? a.frozen.bonds : bonds, atomCount: a.frozen.atoms.length, allowedOperations: operations, allowedElements: elements, allowedFragments: Object.keys(fragments), fragmentTemplates: fragmentCatalog(), fragmentNaming: '丙基/propyl 默认正丙基；C3H7 需澄清正丙基或异丙基。', completePlanRule: '必须覆盖整条要求，复合修改用 batch.edits（2 至 8 步），不支持时暂停并澄清；不能擅自提交替代基团或前半部分。', allowedBondTypes: bondTypes }) };
+      return { annotationId: id, status: a.status, context: JSON.stringify({ protocolVersion: a.protocolVersion ?? 1, draft: this.drafts.has(id) ? this.drafts.view(id,a.frozen) : null, previewVersion:a.previewVersion??null, documentId: a.frozen.documentId, baseRevision: a.frozen.revision, instruction: a.instruction, clarification: a.clarification ?? null, latestUserReply: this.replies.get(sessionId)?.text ?? null, canContinue: ['failed','needs_clarification'].includes(a.status), continuationRule: '补充后先调用 chem_continue_edit，userReply 必须照抄 latestUserReply；已应用/取消/过期批注不能继续。', selectedAtom: a.frozen.target, attachmentAtom: a.frozen.target?.id ?? null, attachmentCandidates: a.frozen.selection.atoms, selection: a.frozen.selection, boundaryBonds: bonds.filter((b: any) => selected.has(b.begin) !== selected.has(b.end)), atoms: full ? a.frozen.atoms : a.frozen.atoms.filter((x: any) => neighborhood.has(x.id)), bonds: full ? a.frozen.bonds : bonds, atomCount: a.frozen.atoms.length, allowedOperations: operations, allowedElements: elements, allowedFragments: fragmentIds, fragmentTemplates: fragmentCatalog(), fragmentNaming: '丙基/propyl 默认正丙基；C3H7 需澄清正丙基或异丙基。固定表之外的基团用带 [*] 连接点的片段 SMILES（如 [*]C#N 氰基），或不带 [*] 时必须用 fragmentConnection 声明原子序号（0 起）与键级。', completePlanRule: '必须覆盖整条要求，复合修改用 batch.edits（2 至 8 步），不支持时暂停并澄清；不能擅自提交替代基团或前半部分。', allowedBondTypes: bondTypes }) };
     });
   }
   async propose(sessionId: string, args: any, signal: AbortSignal) {

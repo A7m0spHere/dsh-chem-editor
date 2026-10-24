@@ -51,7 +51,7 @@ try {
   console.log('PASS rejected commit restores canvas/history; retry attaches once');
   await select(original.atoms[0][0]);await f.getByRole('button',{name:'替换选中原子',exact:true}).click();await saved();const manual=await fingerprint();await select(manual.atoms[0][0]);await propose('添加 CH3');await apply();await undo();assert.deepEqual(await fingerprint(),manual);await undo();assert.deepEqual(await fingerprint(),original);
   console.log('PASS consecutive manual and AI history');
-  await select(original.atoms[0][0]);await f.getByLabel('对选区的批注').fill('添加苄基');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-error="unsupported_fragment"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
+  await select(original.atoms[0][0]);await f.getByLabel('对选区的批注').fill('添加硝基');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-error="unsupported_fragment"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
   console.log('PASS unsupported group explains the failure in the panel and preserves the canvas');
   await load('CC(C)(C)C');original=await fingerprint();await select(original.atoms[1][0]);await f.getByLabel('对选区的批注').fill('添加 OH');await f.getByRole('button',{name:'交给 Agent',exact:true}).click();await f.locator('[data-annotation-status="failed"]').waitFor({timeout:40000});assert.deepEqual(await fingerprint(),original);
   console.log('PASS saturated carbon rejects invalid valence before application');

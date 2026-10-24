@@ -9,7 +9,7 @@ import { EditorCommandBridge } from './client/editor-bridge';
 import 'ketcher-react/dist/index.css';
 import './editor.css';
 import { patchSummary } from './chemistry/molecular-patch';
-import { fragments, fragmentName, fragmentList } from './chemistry/fragments';
+import { fragmentName, fragmentList, fragmentCatalog } from './chemistry/fragment-spec';
 import { samples } from './samples';
 import { localizeEditor } from './localization';
 
@@ -362,7 +362,7 @@ function App() {
       <p className={error || saveError ? 'chem-error' : 'chem-notice'} role={error || saveError ? 'alert' : 'status'}>{busy ? '正在处理结构…' : error || saveError || notice}</p></section>
     <section className="chem-annotation" aria-label="Agent 批注">
       <div className="chem-annotation-heading"><label htmlFor="annotation">对选区的批注</label><details className="chem-shortcuts"><summary>快捷批注</summary><div className="chem-actions" aria-label="批注快捷填入">
-        {Object.keys(fragments).map(id => <button key={id} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(`添加 ${fragmentName(id)}`)}>{language === 'en' ? `Add ${fragmentName(id, language)}` : `添加 ${fragmentName(id)}`}</button>)}
+        {fragmentCatalog().map(({ id }) => <button key={id} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(`添加 ${fragmentName(id)}`)}>{language === 'en' ? `Add ${fragmentName(id, language)}` : `添加 ${fragmentName(id)}`}</button>)}
         {['改成双键', '删除选区'].map(text => <button key={text} disabled={!ready || busy || pendingAnnotation} onClick={() => setInstruction(text)}>{text}</button>)}
       </div></details></div>
       {attachmentSelection.atoms.length > 1 ? <div className="chem-attachment"><label htmlFor="attachment-atom">添加基团的连接原子</label><select id="attachment-atom" value={attachmentAtom ?? ''} disabled={!ready || busy || annotationBusy || processingAnnotation} onChange={e => { const id = e.target.value === '' ? null : Number(e.target.value); attachmentRef.current = id; setAttachmentAtom(id); }}><option value="">请选择连接原子</option>{attachmentSelection.atoms.map((id:number) => <option key={id} value={id}>{attachmentSelection.labels?.find((a:any)=>a.id===id)?.element||''} #{id}</option>)}</select><small>添加基团前指定一个连接点；删除和改键不需要。</small></div> : null}

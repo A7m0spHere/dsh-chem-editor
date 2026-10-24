@@ -116,14 +116,14 @@ pnpm test
 pnpm run test:browser
 ```
 
-Builds automatically check module boundaries; use `pnpm run check:architecture` to run that check separately. See [A0 architecture acceptance (Chinese)](./docs/A0_ACCEPTANCE.md) and [A1 edit-draft acceptance (Chinese)](./docs/A1_ACCEPTANCE.md). A1 adds an optional "draft mode" in the annotation panel; its real-agent and native Desktop acceptance remain open.
+Builds automatically check module boundaries; use `pnpm run check:architecture` to run that check separately. See [A0 architecture acceptance (Chinese)](./docs/A0_ACCEPTANCE.md), [A1 edit-draft acceptance (Chinese)](./docs/A1_ACCEPTANCE.md), and [A2 dynamic-fragment acceptance (Chinese)](./docs/A2_ACCEPTANCE.md). A1 adds an optional "draft mode" in the annotation panel; A2 accepts fragment SMILES with an explicit [*] attachment beyond the fixed group table. Real-agent and native Desktop acceptance are consolidated into a final overall acceptance.
 
-Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. All seven suites (P0/P1/P2/P3, complete edits/continuation, responsive layout, and A1 edit drafts) must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion, idempotent commits, and draft revision/rollback.
+Browser tests require installed Chrome. The runner starts an isolated server and cleans up temporary workspaces. All nine suites (P0/P1/P2/P3, complete edits/continuation, responsive layout, A1 edit drafts, A2 dynamic fragments, and the fragment engine probe) must report `ALL-PASS`. Layout checks cover narrow panels, wide windows, the divider, focus mode and iframe fullscreen. Unit tests cover persistence, conflicts, selection boundaries, deletion, idempotent commits, draft revision/rollback, and dynamic-fragment parsing/execution.
 
 Real-model tests require a separately configured official DSH temporary Web profile and read its launch URL from an ignored local log. Ordinary tests do not call your model. Run `scripts/*-real-agent-test.mjs` only after configuring that environment. `complete-edit-real-agent-test.mjs` covers phenyl addition/replacement, compound edits and actual chat replies.
 
 - [P0 integration](./P0_ACCEPTANCE.md) · [P1 persistence and Chinese UI](./P1_ACCEPTANCE.md) · [P2 Agent workflow](./P2_ACCEPTANCE.md) · [P3 local operations](./P3_ACCEPTANCE.md)
-- [Development plan](./DEVELOPMENT_PLAN.md) · [Agent integration architecture (Chinese)](./docs/AGENT_ARCHITECTURE.md): A0 module extraction and A1 edit drafts are implemented (A1 pending real-agent acceptance); dynamic fragments and general editing remain future phases. Multi-boundary replacement and multiple annotations remain separate scopes.
+- [Development plan](./DEVELOPMENT_PLAN.md) · [Agent integration architecture (Chinese)](./docs/AGENT_ARCHITECTURE.md): A0 module extraction, A1 edit drafts, and A2 dynamic fragments are implemented (real-agent acceptance consolidated into the final pass); general graph editing remains a future phase. Multi-boundary replacement and multiple annotations remain separate scopes.
 - [Report an issue](https://github.com/A7m0spHere/dsh-chem-editor/issues) with the DSH version, steps and a shareable minimal structure. Exclude credentials and authenticated URLs.
 
 ## Licensing and acknowledgements

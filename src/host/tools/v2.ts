@@ -1,13 +1,14 @@
 import type { AnnotationService } from '../annotation-service';
 import { singleOperations, elements, bondTypes } from '../../contracts/operations';
 import { draftLimits } from '../../contracts/draft';
-import { fragmentInputs } from '../../chemistry/fragments';
+import { fragmentInputs } from '../../chemistry/fragment-spec';
 
 export function registerDraftTools(ctx: any, annotations: AnnotationService) {
   const properties = {
     annotationId: { type: 'string' }, editSessionId: { type: 'string' }, expectedDraftRevision: { type: 'integer', minimum: 0 },
   };
-  const edit = { type: 'object', properties: { operation: { type: 'string', enum: singleOperations }, targetAtom: { type: 'string', description: 'Exact a: reference from the current draft; no numeric indices.' }, targetBond: { type: 'string' }, atomRefs: { type: 'array', items: { type: 'string' } }, bondRefs: { type: 'array', items: { type: 'string' } }, element: { type: 'string', enum: elements }, fragment: { type: 'string', enum: fragmentInputs }, bondType: { type: 'integer', enum: bondTypes }, reason: { type: 'string' } }, required: ['operation'], additionalProperties: false };
+  const fragmentParameter = { type: 'string', description: `Fragment id/alias (${fragmentInputs.filter(name => !/[\s]/.test(name)).slice(0, 40).join(', ')}…), or fragment SMILES with an explicit [*] attachment, or SMILES plus fragmentConnection.` };
+  const edit = { type: 'object', properties: { operation: { type: 'string', enum: singleOperations }, targetAtom: { type: 'string', description: 'Exact a: reference from the current draft; no numeric indices.' }, targetBond: { type: 'string' }, atomRefs: { type: 'array', items: { type: 'string' } }, bondRefs: { type: 'array', items: { type: 'string' } }, element: { type: 'string', enum: elements }, fragment: fragmentParameter, fragmentConnection: { type: 'object', properties: { atom: { type: 'integer', minimum: 0 }, bondType: { type: 'integer', enum: bondTypes } }, required: ['atom', 'bondType'], additionalProperties: false }, bondType: { type: 'integer', enum: bondTypes }, reason: { type: 'string' } }, required: ['operation'], additionalProperties: false };
   for (const [name, action, description, parameters] of [
     ['chem_begin_edit', 'begin', 'Begin/read a protocolVersion=2 draft from this annotation. The original canvas stays unchanged. Read chem_get_context first. Returns stable atom/bond refs including newly created objects; never widen the original scope.', { type: 'object', properties: { annotationId: properties.annotationId }, required: ['annotationId'], additionalProperties: false }],
     ['chem_edit_draft', 'edit', 'Edit the molecular draft with existing operations. Read returned refs and neighbors before targeting newly created atoms. A group is atomic. requestId retries never duplicate work. To repair an earlier operation use rewindToStep (keep that many earlier steps) and submit the corrected suffix. Errors preserve draft content; no automatic application.', { type: 'object', properties: { ...properties, requestId: { type: 'string' }, rewindToStep: { type: 'integer', minimum: 0 }, edits: { type: 'array', minItems: 1, maxItems: draftLimits.operationsPerCall, items: edit } }, required: ['annotationId', 'editSessionId', 'expectedDraftRevision', 'requestId', 'edits'], additionalProperties: false }],

@@ -2,7 +2,7 @@
 
 日期：2026-10-07。状态：P0/P1/P2 已实现并通过浏览器、真实 DSH Agent 与官方桌面端验证，详见 [P2_ACCEPTANCE.md](./P2_ACCEPTANCE.md)。P3 及单出口片段替换、完整计划和澄清续接已实现；最新验证见 [EDIT_FLOW_ACCEPTANCE.md](./EDIT_FLOW_ACCEPTANCE.md)，初版历史见 [P3_ACCEPTANCE.md](./P3_ACCEPTANCE.md)。多条批注与多出口替换仍为后续提案。新增能力的 Desktop 原生验收未完成。
 
-2026-10-08 架构补充：Agent 能力融合以 [Agent 编辑能力与融合架构](./docs/AGENT_ARCHITECTURE.md)为唯一规划入口。A0 已实现模块整理、合同提取与依赖边界检查，证据见 [架构整理验收](./docs/A0_ACCEPTANCE.md)；A1 草稿会话已实现并通过单元与浏览器确定性验收，证据见 [A1 草稿验收](./docs/A1_ACCEPTANCE.md)，真实 Agent 与 Desktop 原生验收待完成；A2–A4 的动态片段和通用编辑仍待实施。本文保留 v0.1 基线，当前支持范围和历史原生验收边界保持不变。
+2026-10-08 架构补充：Agent 能力融合以 [Agent 编辑能力与融合架构](./docs/AGENT_ARCHITECTURE.md)为唯一规划入口。A0 已实现模块整理、合同提取与依赖边界检查，证据见 [架构整理验收](./docs/A0_ACCEPTANCE.md)；A1 草稿会话与 A2 动态片段（FragmentSpec 统一、严格片段 SMILES、引擎探针）已实现并通过单元与浏览器确定性验收，证据见 [A1 草稿验收](./docs/A1_ACCEPTANCE.md)、[A2 动态片段验收](./docs/A2_ACCEPTANCE.md)，真实 Agent 与 Desktop 原生验收并入各阶段完成后的总验收；A3–A4 的通用编辑仍待实施。本文保留 v0.1 基线，当前支持范围和历史原生验收边界保持不变。
 
 ## 产品目标
 
